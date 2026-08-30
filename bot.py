@@ -1,6 +1,7 @@
 import os
+import threading
 import telebot
-from flask import Flask, request
+from flask import Flask
 from telebot import types
 
 TOKEN = "8965396208:AAGN062Yh8u9H76gH_wQ4lfnvdgE8dCEt5w"
@@ -15,28 +16,25 @@ WALLET_ADDRESS = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
 ADMIN_ID = 8655689754
 ADMIN_USERNAME = "@TradeGuard_Admin"
 
-# ربط الويب هوك بشكل مباشر ومضمون 100% مع رابط منصتك
-RENDER_URL = "https://telegram-bot-pqy3.onrender.com"
-try:
-  bot.remove_webhook()
-  bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
-  print("Webhook set successfully!")
-except Exception as e:
-  print(f"Webhook error: {e}")
 
-
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-  # استقبال التحديثات من تيليجرام مباشرة وبدون قيود لضمان عدم ضياع أي رسالة
-  json_string = request.get_data().decode("utf-8")
-  update = telebot.types.Update.de_json(json_string)
-  bot.process_new_updates([update])
-  return "", 200
-
-
+# خادم الويب الأساسي لإرضاء منصة Render وبقائها متصلة
 @app.route("/", methods=["GET"])
 def index():
   return "Bot is alive and running successfully!", 200
+
+
+# تشغيل البوت بنظام الـ Polling في الخلفية لضمان الاستجابة الفورية لأي رسالة
+def run_bot():
+  try:
+    bot.remove_webhook()  # مسح أي ويب هوك قديم قد يعطل البوت
+    print("Starting bot polling...")
+    bot.infinity_polling(skip_pending=True)
+  except Exception as e:
+    print(f"Polling error: {e}")
+
+
+# تشغيل خيط البوت في الخلفية مع خادم الويب
+threading.Thread(target=run_bot, daemon=True).start()
 
 
 @bot.message_handler(commands=["start"])
@@ -57,7 +55,7 @@ def send_welcome(message):
       f"الرجاء اختيار لغة التحليل المفضلة لديك:\n"
       f"Please choose your preferred analysis language:"
   )
-  bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
+  bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
 
 
 @bot.callback_query_handler(func=lambda call: True)
