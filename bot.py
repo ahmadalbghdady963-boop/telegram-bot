@@ -87,7 +87,6 @@ def set_language(call):
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
-  # تشغيل المعالجة في خيط منفصل (Background Thread) لعدم تجميد البوت نهائياً
   threading.Thread(target=process_chart_image, args=(message,)).start()
 
 
@@ -128,9 +127,9 @@ def process_chart_image(message):
 
   msg = bot.reply_to(
       message,
-      "⏳ جاري معالجة الصورة وتحليلها..."
+      "⏳ جاري تحميل الصورة..."
       if lang == "ar"
-      else "⏳ Processing and analyzing image...",
+      else "⏳ Downloading image...",
   )
 
   try:
@@ -149,7 +148,16 @@ def process_chart_image(message):
     img_res = requests.get(download_url, timeout=30)
     downloaded_file = img_res.content
 
-    # رفع الصورة إلى Dify
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=msg.message_id,
+        text=(
+            "⏳ جاري رفع الصورة إلى الخادم..."
+            if lang == "ar"
+            else "⏳ Uploading image...",
+        ),
+    )
+
     upload_url = "https://api.dify.ai/v1/files/upload"
     headers_upload = {"Authorization": f"Bearer {DIFY_API_KEY}"}
     files_data = {"file": ("chart.jpg", downloaded_file, "image/jpeg")}
@@ -171,8 +179,18 @@ def process_chart_image(message):
 
     upload_result = upload_response.json()
     dify_file_id = upload_result.get("id")
+    print(f"Debug: Image uploaded successfully, Dify file ID: {dify_file_id}")
 
-    # طلب التحليل من Dify
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=msg.message_id,
+        text=(
+            "⏳ جاري تحليل الشارت فنياً..."
+            if lang == "ar"
+            else "⏳ Analyzing chart technically...",
+        ),
+    )
+
     chat_url = "https://api.dify.ai/v1/chat-messages"
     query_text = (
         "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
@@ -197,8 +215,13 @@ def process_chart_image(message):
         "Content-Type": "application/json",
     }
 
+    print("Debug: Sending request to Dify chat-messages API...")
     response = requests.post(
-        chat_url, headers=headers_chat, json=payload, timeout=60
+        chat_url, headers=headers_chat, json=payload, timeout=90
+    )
+    print(
+        f"Debug: Dify chat response status code: {response.status_code},"
+        f" text: {response.text[:200]}"
     )
 
     if response.status_code != 200:
@@ -232,6 +255,7 @@ def process_chart_image(message):
         bot.send_message(message.chat.id, rem_msg)
 
   except Exception as e:
+    print(f"Error encountered: {str(e)}")
     bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=msg.message_id,
