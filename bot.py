@@ -87,6 +87,11 @@ def set_language(call):
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
+  # تشغيل المعالجة في خيط منفصل (Background Thread) لعدم تجميد البوت نهائياً
+  threading.Thread(target=process_chart_image, args=(message,)).start()
+
+
+def process_chart_image(message):
   user_id = str(message.from_user.id)
   user_data = get_user_data(user_id)
 
@@ -123,13 +128,12 @@ def handle_photo(message):
 
   msg = bot.reply_to(
       message,
-      "⏳ جاري تحميل الصورة..."
+      "⏳ جاري معالجة الصورة وتحليلها..."
       if lang == "ar"
-      else "⏳ Downloading image...",
+      else "⏳ Processing and analyzing image...",
   )
 
   try:
-    # جلب مسار ورابط الصورة من تيليجرام مباشرة مع Timeout لمنع التعليق
     file_id = message.photo[-1].file_id
     file_info_url = (
         f"https://api.telegram.org/bot{TOKEN}/getFile?file_id={file_id}"
@@ -145,17 +149,7 @@ def handle_photo(message):
     img_res = requests.get(download_url, timeout=30)
     downloaded_file = img_res.content
 
-    bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=msg.message_id,
-        text=(
-            "⏳ جاري رفع الصورة إلى الخادم..."
-            if lang == "ar"
-            else "⏳ Uploading image to server...",
-        ),
-    )
-
-    # الخطوة 1: رفع الصورة إلى Dify
+    # رفع الصورة إلى Dify
     upload_url = "https://api.dify.ai/v1/files/upload"
     headers_upload = {"Authorization": f"Bearer {DIFY_API_KEY}"}
     files_data = {"file": ("chart.jpg", downloaded_file, "image/jpeg")}
@@ -178,17 +172,7 @@ def handle_photo(message):
     upload_result = upload_response.json()
     dify_file_id = upload_result.get("id")
 
-    bot.edit_message_text(
-        chat_id=message.chat.id,
-        message_id=msg.message_id,
-        text=(
-            "⏳ جاري تحليل الشارت فنياً..."
-            if lang == "ar"
-            else "⏳ Analyzing chart technically...",
-        ),
-    )
-
-    # الخطوة 2: إرسال الشات
+    # طلب التحليل من Dify
     chat_url = "https://api.dify.ai/v1/chat-messages"
     query_text = (
         "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
@@ -214,7 +198,7 @@ def handle_photo(message):
     }
 
     response = requests.post(
-        chat_url, headers=headers_chat, json=payload, timeout=45
+        chat_url, headers=headers_chat, json=payload, timeout=60
     )
 
     if response.status_code != 200:
