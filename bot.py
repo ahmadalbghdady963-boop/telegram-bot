@@ -1,37 +1,37 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import threading
 from flask import Flask, request, abort
 import requests
 from telebot import TeleBot, types
 
-# جلب المتغيرات
+# جلب المتغيرات من ريندر
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 DIFY_API_KEY = os.getenv("DIFY_API_KEY")
 FIREBASE_URL = os.getenv("FIREBASE_URL")
 PORT = int(os.getenv("PORT", 10000))
 
-# رابط تطبيقك على ريندر للربط مع تيليجرام
+# الآيدي الخاص بحسابك الإداري
+ADMIN_ID = "8655689754"
+
+# رابط تطبيقك على ريندر للربط مع تيليجرام (تأكد من تعديله إذا تغير)
 RENDER_APP_URL = "https://telegram-bot-pqy3.onrender.com"
 
 bot = TeleBot(TOKEN)
 WALLET_TON = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
+ADMIN_USERNAME = "@TradeGuard_Admin"
 
 app = Flask(__name__)
 USER_CACHE = {}
 
-
 @app.route("/")
 def home():
-  return "TradeGuard AI Bot is active and running with Webhooks!"
-
+  return "TradeGuard AI Bot is active and running!"
 
 @app.route("/health")
 def health():
   return "OK", 200
 
-
-# مسار الـ Webhook الآمن المخفي
 @app.route(f"/{TOKEN}", methods=['POST'])
 def webhook():
   if request.headers.get('content-type') == 'application/json':
@@ -41,7 +41,6 @@ def webhook():
     return '', 200
   else:
     abort(403)
-
 
 def get_user_data(user_id):
   if user_id not in USER_CACHE:
@@ -57,7 +56,6 @@ def get_user_data(user_id):
 
   return USER_CACHE[user_id]
 
-
 def update_user_data(user_id, data):
   if user_id not in USER_CACHE:
     USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
@@ -70,6 +68,24 @@ def update_user_data(user_id, data):
     except Exception as e:
       print(f"Firebase update error: {e}")
 
+@bot.message_handler(commands=['activate'])
+def activate_user(message):
+  if str(message.from_user.id) != ADMIN_ID:
+    return 
+
+  try:
+    parts = message.text.split()
+    target_user_id = parts[1]
+    days = int(parts[2])
+
+    new_expiry_date = (datetime.now() + timedelta(days=days)).isoformat()
+    update_user_data(target_user_id, {"expiry_date": new_expiry_date, "trials": 0})
+    
+    bot.reply_to(message, f"✅ تم تفعيل المشترك `{target_user_id}` لمدة {days} يوم بنجاح.", parse_mode="Markdown")
+    bot.send_message(target_user_id, f"🎉 **تم تفعيل اشتراكك بنجاح لمدة {days} يوم!**\nيمكنك الآن إرسال الشارتات بلا حدود.", parse_mode="Markdown")
+    
+  except Exception as e:
+    bot.reply_to(message, "❌ **خطأ في الصيغة.**\nالاستخدام الصحيح:\n`/activate <آيدي_المشترك> <عدد_الأيام>`\nمثال: `/activate 123456789 30`", parse_mode="Markdown")
 
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
@@ -108,7 +124,6 @@ def send_welcome(message):
   except Exception as e:
     print(f"Error in start command: {e}")
 
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
 def set_language(call):
   try:
@@ -124,14 +139,11 @@ def set_language(call):
     bot.answer_callback_query(call.id)
     bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id)
   except Exception as e:
-    print(f"Error in callback language: {e}")
-
+    print(f"Error in callback: {e}")
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
-  # تم وضع المعالجة في Thread لتجنب انقطاع الاتصال (Timeout) مع تيليجرام
   threading.Thread(target=process_chart_image, args=(message,)).start()
-
 
 def process_chart_image(message):
   user_id = str(message.from_user.id)
@@ -152,15 +164,21 @@ def process_chart_image(message):
   if not is_subscribed and trials >= 3:
     if lang == "ar":
       sub_msg = (
-          "⚠️ **انتهت محاولاتك المجانية الثلاث!**\n\nللاستمرار في تلقي تحليلات غير محدودة، اختر إحدى باقاتنا:\n"
+          "⚠️ **انتهت محاولاتك المجانية!**\n\nللاشتراك والحصول على تحليلات غير محدودة:\n"
           "🥉 **باقة 10 أيام (15$)**\n🏆 **الباقة الشهرية (38$)**\n\n"
-          f"💳 **الدفع عبر TON:**\n`{WALLET_TON}`\n\nأرسل لقطة شاشة للتحويل هنا لتفعيل حسابك."
+          f"💳 **الدفع عبر شبكة TON:**\n`{WALLET_TON}`\n\n"
+          "✅ **للتفعيل:**\n"
+          f"قم بنسخ هذا الرقم (الآيدي الخاص بك): `{user_id}`\n"
+          f"وأرسله مع صورة إيصال الدفع إلى الإدارة هنا: {ADMIN_USERNAME}"
       )
     else:
       sub_msg = (
-          "⚠️ **Your 3 free trials have ended!**\n\nTo continue receiving unlimited analysis, choose a plan:\n"
+          "⚠️ **Your free trials have ended!**\n\nTo subscribe for unlimited analysis:\n"
           "🥉 **10-Day Plan ($15)**\n🏆 **Monthly Plan ($38)**\n\n"
-          f"💳 **Pay via TON:**\n`{WALLET_TON}`\n\nSend a screenshot of the transfer here to activate your account."
+          f"💳 **Pay via TON network:**\n`{WALLET_TON}`\n\n"
+          "✅ **To Activate:**\n"
+          f"Copy this ID: `{user_id}`\n"
+          f"And send it with the payment receipt to the admin here: {ADMIN_USERNAME}"
       )
     bot.reply_to(message, sub_msg, parse_mode="Markdown")
     return
@@ -194,7 +212,7 @@ def process_chart_image(message):
     upload_response = requests.post(upload_url, headers=headers_upload, files=files_data, data=data_upload, timeout=30)
 
     if upload_response.status_code not in [200, 201]:
-      raise Exception(f"Upload failed [{upload_response.status_code}]: {upload_response.text}")
+      raise Exception("Upload failed")
 
     upload_result = upload_response.json()
     dify_file_id = upload_result.get("id")
@@ -224,17 +242,15 @@ def process_chart_image(message):
     
     headers_chat = {"Authorization": f"Bearer {DIFY_API_KEY}", "Content-Type": "application/json"}
     
-    # تمت زيادة وقت الانتظار هنا لضمان عدم حدوث خطأ إذا تأخر Dify في الرد
     response = requests.post(chat_url, headers=headers_chat, json=payload, timeout=120)
 
     if response.status_code != 200:
-      raise Exception(f"Chat API failed [{response.status_code}]: {response.text}")
+      raise Exception("Chat API failed")
 
     result = response.json()
-    answer = result.get("answer", "عذراً، لم يتمكن النظام من قراءة التحليل." if lang == "ar" else "Sorry, the system couldn't read the analysis.")
+    answer = result.get("answer", "عذراً، خطأ في القراءة." if lang == "ar" else "Sorry, reading error.")
     bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=answer)
 
-    # خصم المحاولة
     if not is_subscribed:
       new_trials = trials + 1
       update_user_data(user_id, {"trials": new_trials})
@@ -245,13 +261,10 @@ def process_chart_image(message):
   except Exception as e:
     bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Error: {str(e)}")
 
-
-# تفعيل الـ Webhook فور تشغيل التطبيق
 def setup_webhook():
   try:
     bot.remove_webhook()
     bot.set_webhook(url=f"{RENDER_APP_URL}/{TOKEN}")
-    print(f"Webhook set successfully to {RENDER_APP_URL}")
   except Exception as e:
     print(f"Failed to set Webhook: {e}")
 
