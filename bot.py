@@ -12,7 +12,6 @@ FIREBASE_URL = os.getenv("FIREBASE_URL")
 PORT = int(os.getenv("PORT", 10000))
 
 bot = TeleBot(TOKEN)
-DIFY_URL = "https://api.dify.ai/v1/chat-messages"
 WALLET_TON = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
 
 app = Flask(__name__)
@@ -129,26 +128,55 @@ def handle_photo(message):
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
 
+    # الخطوة 1: رفع الصورة إلى Dify للحصول على file_id
+    upload_url = "https://api.dify.ai/v1/files/upload"
+    headers_upload = {"Authorization": f"Bearer {DIFY_API_KEY}"}
+    files_data = {"file": ("chart.jpg", downloaded_file, "image/jpeg")}
+    data_upload = {"user": user_id}
+
+    upload_response = requests.post(
+        upload_url,
+        headers=headers_upload,
+        files=files_data,
+        data=data_upload,
+        timeout=60,
+    )
+    upload_result = upload_response.json()
+
+    if upload_response.status_code not in [200, 201]:
+      raise Exception(
+          f"File upload failed: {upload_result.get('message', 'Unknown error')}"
+      )
+
+    file_id = upload_result.get("id")
+
+    # الخطوة 2: إرسال طلب الشات مع معرف الملف بصيغة JSON
+    chat_url = "https://api.dify.ai/v1/chat-messages"
     query_text = (
         "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
         if lang == "ar"
         else "Analyze this chart in detail with technical indicators in English."
     )
 
-    data_json = {
+    payload = {
         "inputs": {},
         "query": query_text,
         "response_mode": "blocking",
         "user": user_id,
+        "files": [{
+            "type": "image",
+            "transfer_method": "local_file",
+            "upload_file_id": file_id,
+        }],
     }
 
-    files = {"files": ("chart.jpg", downloaded_file, "image/jpeg")}
-    data = {"data": json.dumps(data_json)}
-
-    headers = {"Authorization": f"Bearer {DIFY_API_KEY}"}
+    headers_chat = {
+        "Authorization": f"Bearer {DIFY_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
     response = requests.post(
-        DIFY_URL, headers=headers, data=data, files=files, timeout=60
+        chat_url, headers=headers_chat, json=payload, timeout=60
     )
     result = response.json()
 
@@ -178,7 +206,7 @@ def handle_photo(message):
           bot.send_message(message.chat.id, rem_msg)
     else:
       err_msg = (
-          f"❌ فشل الرفع: {result.get('message', 'خطأ')}"
+          f"❌ فشل التحليل: {result.get('message', 'خطأ')}"
           if lang == "ar"
           else f"❌ Error: {result.get('message', 'Unknown error')}"
       )
