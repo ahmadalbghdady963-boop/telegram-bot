@@ -3,9 +3,7 @@ import telebot
 from flask import Flask, request
 from telebot import types
 
-TOKEN = os.environ.get(
-    "TELEGRAM_TOKEN", "8965396208:AAGN062Yh8u9H76gH_wQ4lfnvdgE8dCEt5w"
-)
+TOKEN = "8965396208:AAGN062Yh8u9H76gH_wQ4lfnvdgE8dCEt5w"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -17,25 +15,23 @@ WALLET_ADDRESS = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
 ADMIN_ID = 8655689754
 ADMIN_USERNAME = "@TradeGuard_Admin"
 
-# تسجيل الويب هوك تلقائياً للعمل مع Render
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
-if RENDER_URL:
-  try:
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
-  except Exception as e:
-    print(f"Error setting webhook: {e}")
+# ربط الويب هوك بشكل مباشر ومضمون 100% مع رابط منصتك
+RENDER_URL = "https://telegram-bot-pqy3.onrender.com"
+try:
+  bot.remove_webhook()
+  bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
+  print("Webhook set successfully!")
+except Exception as e:
+  print(f"Webhook error: {e}")
 
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
-  if request.headers.get("content-type") == "application/json":
-    json_string = request.get_data().decode("utf-8")
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return "", 200
-  else:
-    return "Forbidden", 403
+  # استقبال التحديثات من تيليجرام مباشرة وبدون قيود لضمان عدم ضياع أي رسالة
+  json_string = request.get_data().decode("utf-8")
+  update = telebot.types.Update.de_json(json_string)
+  bot.process_new_updates([update])
+  return "", 200
 
 
 @app.route("/", methods=["GET"])
@@ -173,7 +169,6 @@ def show_subscription_plans(message, lang):
   bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
 
-# أمر التفعيل اليدوي للأدمن: /activate <user_id>
 @bot.message_handler(commands=["activate"])
 def admin_activate(message):
   if message.from_user.id != ADMIN_ID:
