@@ -1,22 +1,41 @@
 import os
 import telebot
+from flask import Flask, request
 from telebot import types
 
 TOKEN = os.environ.get(
     "TELEGRAM_TOKEN", "8965396208:AAGN062Yh8u9H76gH_wQ4lfnvdgE8dCEt5w"
 )
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
 # قاعدة بيانات مؤقتة للمستخدمين
 users_data = {}
 
 # عنوان المحفظة الخاص بك (ضع عنوان محفظتك الحقيقي هنا)
-WALLET_ADDRESS = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK (TRC20 - USDT)"
+WALLET_ADDRESS = "TXxxxxxxxxxxxxxxxxxxxxxxxxxxx (TRC20 - USDT)"
 
-# الآيدي الخاص بك كمسؤول (للتفعيل اليدوي)
+# الآيدي الخاص بك كمسؤول (للتفعيل اليدوي للمشتركين)
 ADMIN_ID = (
-    8655689754  # استبدل هذا الرقم بالـ ID الحقيقي الخاص بك على تيليجرام
+    123456789  # استبدل هذا الرقم بالـ ID الحقيقي الخاص بك على تيليجرام
 )
+
+
+# مسار الويب هوك المتوافق مع خوادم Render
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+  if request.headers.get("content-type") == "application/json":
+    json_string = request.get_data().decode("utf-8")
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "", 200
+  else:
+    return "Forbidden", 403
+
+
+@app.route("/", methods=["GET"])
+def index():
+  return "Bot is alive and running successfully!", 200
 
 
 @bot.message_handler(commands=["start"])
@@ -67,13 +86,21 @@ def show_main_menu(message, lang):
         types.InlineKeyboardButton("📊 حسابي ومعلوماتي", callback_data="check_account"),
         types.InlineKeyboardButton("💎 خطط الاشتراكات", callback_data="subscribe_menu"),
     )
-    bot.edit_message_text(
-        "القائمة الرئيسية جاهزة.\nأرسل صورة الشارت الآن وسيقوم البوت بتحليله"
-        " باللغة العربية!",
-        message.chat.id,
-        message.message_id,
-        reply_markup=markup,
-    )
+    try:
+      bot.edit_message_text(
+          "القائمة الرئيسية جاهزة.\nأرسل صورة الشارت الآن وسيقوم البوت بتحليله"
+          " باللغة العربية!",
+          message.chat.id,
+          message.message_id,
+          reply_markup=markup,
+      )
+    except Exception:
+      bot.send_message(
+          message.chat.id,
+          "القائمة الرئيسية جاهزة.\nأرسل صورة الشارت الآن وسيقوم البوت بتحليله"
+          " باللغة العربية!",
+          reply_markup=markup,
+      )
   else:
     markup.add(
         types.InlineKeyboardButton(
@@ -83,12 +110,19 @@ def show_main_menu(message, lang):
             "💎 Subscription Plans", callback_data="subscribe_menu"
         ),
     )
-    bot.edit_message_text(
-        "Main menu ready.\nSend the chart image now to analyze in English!",
-        message.chat.id,
-        message.message_id,
-        reply_markup=markup,
-    )
+    try:
+      bot.edit_message_text(
+          "Main menu ready.\nSend the chart image now to analyze in English!",
+          message.chat.id,
+          message.message_id,
+          reply_markup=markup,
+      )
+    except Exception:
+      bot.send_message(
+          message.chat.id,
+          "Main menu ready.\nSend the chart image now to analyze in English!",
+          reply_markup=markup,
+      )
 
 
 def show_account_info(message, user_id):
@@ -119,7 +153,7 @@ def show_subscription_plans(message, lang):
         f"💳 **طريقة الدفع:**\n"
         f"قم بتحويل المبلغ المطلوبة إلى عنوان محفظتنا (USDT - TRC20):\n"
         f"`{WALLET_ADDRESS}`\n\n"
-        f"📩 بعد التحويل، أرسل صورة الإيصال مع الـ ID الخاص بك إلى الإدارة لتفعيل"
+        f"📩 بعد التحويل، أرسل صورة إيصال الدفع مع الـ ID الخاص بك إلى الإدارة لتفعيل"
         f" اشتراكك فوراً."
     )
   else:
@@ -162,7 +196,7 @@ def admin_activate(message):
     bot.reply_to(message, "خطأ في الصيغة. استخدم الأمر هكذا: /activate <user_id>")
 
 
-# استقبال الصور
+# استقبال الصور وتحليلها باللغة المختارة
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
   user_id = message.from_user.id
@@ -172,23 +206,23 @@ def handle_photo(message):
   user = users_data[user_id]
   lang = user["lang"]
 
-  # التحقق من انتهاء المحاولات وعدم الاشتراك
   if not user["subscribed"] and user["trials"] <= 0:
     if lang == "ar":
       bot.reply_to(
           message,
           "❌ عذراً، لقد نفدت جميع محاولاتك المجانية (3/3).\nللاشتراك ومتابعة"
-          " التحليلات بلا حدود، يرجى مراجعة قسم خطط الاشتراكات.",
+          " التحليلات بلا حدود، يرجى مراجعة قسم خطط الاشتراكات (10 أيام بـ 15$"
+          " أو شهرياً بـ 38$).",
       )
     else:
       bot.reply_to(
           message,
           "❌ Sorry, your free trials have expired (3/3).\nTo continue"
-          " analysis, please check our subscription plans.",
+          " analysis, please check our subscription plans ($15 for 10 days, $38"
+          " monthly).",
       )
     return
 
-  # خصم محاولة إذا لم يكن مشتركاً
   if not user["subscribed"]:
     user["trials"] -= 1
 
@@ -203,15 +237,15 @@ def handle_photo(message):
   else:
     bot.reply_to(
         message,
-        f"🔍 Chart received.\nAnalyzing data in English...\n(Remaining free"
-        f" trials: {remaining})",
+        f"🔍 Chart received successfully.\nAnalyzing data in English...\n(Remaining"
+        f" free trials: {remaining})",
     )
 
 
 if __name__ == "__main__":
-  print("Bot is running with full professional features...")
-  try:
+  RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
+  if RENDER_URL:
     bot.remove_webhook()
-  except Exception:
-    pass
-  bot.infinity_polling(none_stop=True)
+    bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
+
+  app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
