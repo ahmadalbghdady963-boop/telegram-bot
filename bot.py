@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 import os
 import threading
 from flask import Flask
@@ -128,22 +129,26 @@ def handle_photo(message):
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
 
-    files = [("file", ("chart.jpg", downloaded_file, "image/jpeg"))]
     query_text = (
         "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
         if lang == "ar"
         else "Analyze this chart in detail with technical indicators in English."
     )
-    payload = {
+
+    data_json = {
         "inputs": {},
         "query": query_text,
         "response_mode": "blocking",
         "user": user_id,
     }
+
+    files = {"files": ("chart.jpg", downloaded_file, "image/jpeg")}
+    data = {"data": json.dumps(data_json)}
+
     headers = {"Authorization": f"Bearer {DIFY_API_KEY}"}
 
     response = requests.post(
-        DIFY_URL, headers=headers, data=payload, files=files, timeout=60
+        DIFY_URL, headers=headers, data=data, files=files, timeout=60
     )
     result = response.json()
 
