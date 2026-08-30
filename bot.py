@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import threading
 from flask import Flask, request, abort
 import requests
 from telebot import TeleBot, types
@@ -128,8 +129,8 @@ def set_language(call):
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
-  # تم تحويل المعالجة لتتم مباشرة لأن الويب هوك يتحمل الوقت بشكل أفضل
-  process_chart_image(message)
+  # تم وضع المعالجة في Thread لتجنب انقطاع الاتصال (Timeout) مع تيليجرام
+  threading.Thread(target=process_chart_image, args=(message,)).start()
 
 
 def process_chart_image(message):
@@ -222,7 +223,9 @@ def process_chart_image(message):
     }
     
     headers_chat = {"Authorization": f"Bearer {DIFY_API_KEY}", "Content-Type": "application/json"}
-    response = requests.post(chat_url, headers=headers_chat, json=payload, timeout=90)
+    
+    # تمت زيادة وقت الانتظار هنا لضمان عدم حدوث خطأ إذا تأخر Dify في الرد
+    response = requests.post(chat_url, headers=headers_chat, json=payload, timeout=120)
 
     if response.status_code != 200:
       raise Exception(f"Chat API failed [{response.status_code}]: {response.text}")
@@ -244,12 +247,15 @@ def process_chart_image(message):
 
 
 # تفعيل الـ Webhook فور تشغيل التطبيق
-try:
-  bot.remove_webhook()
-  bot.set_webhook(url=f"{RENDER_APP_URL}/{TOKEN}")
-  print(f"Webhook set successfully to {RENDER_APP_URL}")
-except Exception as e:
-  print(f"Failed to set Webhook: {e}")
+def setup_webhook():
+  try:
+    bot.remove_webhook()
+    bot.set_webhook(url=f"{RENDER_APP_URL}/{TOKEN}")
+    print(f"Webhook set successfully to {RENDER_APP_URL}")
+  except Exception as e:
+    print(f"Failed to set Webhook: {e}")
+
+setup_webhook()
 
 if __name__ == "__main__":
   app.run(host="0.0.0.0", port=PORT)
