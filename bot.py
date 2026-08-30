@@ -1,15 +1,29 @@
 from datetime import datetime, timedelta
 import os
+import threading
+from flask import Flask
 import requests
 from telebot import TeleBot, types
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 DIFY_API_KEY = os.getenv("DIFY_API_KEY")
 FIREBASE_URL = os.getenv("FIREBASE_URL")
+PORT = int(os.getenv("PORT", 10000))
 
 bot = TeleBot(TOKEN)
 DIFY_URL = "https://api.dify.ai/v1/chat-messages"
 WALLET_TON = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+  return "TradeGuard AI Bot is active and running!"
+
+
+def run_flask():
+  app.run(host="0.0.0.0", port=PORT)
 
 
 def get_user_data(user_id):
@@ -88,15 +102,15 @@ def handle_photo(message):
     if lang == "ar":
       sub_msg = (
           "⚠️ **انتهت محاولاتك المجانية الثلاث!**\n\nللاستمرار في تلقي تحليلات"
-          " غير محدودة، اختر إحدى باقاتنا:\n🥉 **باقة 10 أيام:** 15$\n🏆"
-          " **الباقة الشهرية:** 38$\n\n💳 **الدفع عبر TON:**\n"
+          " غير محدودة، اختر إحدى باقاتنا:\n🥉 **باقة 10 أيام (15$)**\n🏆"
+          " **الباقة الشهرية (38$)**\n\n💳 **الدفع عبر TON:**\n"
           f"`{WALLET_TON}`\n\nأرسل لقطة شاشة للتحويل هنا لتفعيل حسابك."
       )
     else:
       sub_msg = (
           "⚠️ **Your 3 free trials have ended!**\n\nTo continue receiving"
-          " unlimited analysis, choose a plan:\n🥉 **10-Day Plan:** $15\n🏆"
-          " **Monthly Plan:** $38\n\n💳 **Pay via TON:**\n"
+          " unlimited analysis, choose a plan:\n🥉 **10-Day Plan ($15)**\n🏆"
+          " **Monthly Plan ($38)**\n\n💳 **Pay via TON:**\n"
           f"`{WALLET_TON}`\n\nSend a screenshot of the transfer here to activate"
           " your account."
       )
@@ -176,4 +190,5 @@ def handle_photo(message):
 
 
 if __name__ == "__main__":
+  threading.Thread(target=run_flask).start()
   bot.infinity_polling()
