@@ -28,7 +28,7 @@ def run_flask():
 
 def get_user_data(user_id):
   try:
-    res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json")
+    res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json", timeout=10)
     if res.status_code == 200 and res.json():
       return res.json()
   except Exception:
@@ -38,7 +38,9 @@ def get_user_data(user_id):
 
 def update_user_data(user_id, data):
   try:
-    requests.patch(f"{FIREBASE_URL}/users/{user_id}.json", json=data)
+    requests.patch(
+        f"{FIREBASE_URL}/users/{user_id}.json", json=data, timeout=10
+    )
   except Exception:
     pass
 
@@ -117,12 +119,12 @@ def handle_photo(message):
     bot.reply_to(message, sub_msg, parse_mode="Markdown")
     return
 
-  loading_text = (
-      "⏳ جاري رفع الصورة وتحليل الشارت بدقة..."
+  msg = bot.reply_to(
+      message,
+      "⏳ جاري رفع الصورة إلى الخادم..."
       if lang == "ar"
-      else "⏳ Uploading image and analyzing chart..."
+      else "⏳ Uploading image to server...",
   )
-  msg = bot.reply_to(message, loading_text)
 
   try:
     file_info = bot.get_file(message.photo[-1].file_id)
@@ -139,7 +141,7 @@ def handle_photo(message):
         headers=headers_upload,
         files=files_data,
         data=data_upload,
-        timeout=60,
+        timeout=30,
     )
 
     if upload_response.status_code not in [200, 201]:
@@ -150,6 +152,16 @@ def handle_photo(message):
 
     upload_result = upload_response.json()
     file_id = upload_result.get("id")
+
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=msg.message_id,
+        text=(
+            "⏳ جاري تحليل الشارت فنياً..."
+            if lang == "ar"
+            else "⏳ Analyzing chart technically..."
+        ),
+    )
 
     # الخطوة 2: إرسال الشات
     chat_url = "https://api.dify.ai/v1/chat-messages"
@@ -177,7 +189,7 @@ def handle_photo(message):
     }
 
     response = requests.post(
-        chat_url, headers=headers_chat, json=payload, timeout=60
+        chat_url, headers=headers_chat, json=payload, timeout=45
     )
 
     if response.status_code != 200:
