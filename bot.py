@@ -1,112 +1,179 @@
+from datetime import datetime, timedelta
 import os
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import telebot
 import requests
+from telebot import TeleBot, types
 
-# --- 1. خادم وهمي للبقاء على الخطة المجانية في Render ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+DIFY_API_KEY = os.getenv("DIFY_API_KEY")
+FIREBASE_URL = os.getenv("FIREBASE_URL")
 
-def run_health_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    server.serve_forever()
+bot = TeleBot(TOKEN)
+DIFY_URL = "https://api.dify.ai/v1/chat-messages"
+WALLET_TON = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
 
-threading.Thread(target=run_health_server, daemon=True).start()
 
-# --- 2. إعدادات التليجرام و Dify ---
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-DIFY_API_KEY = os.environ.get("DIFY_API_KEY", "").strip()
-DIFY_BASE_URL = os.environ.get("DIFY_BASE_URL", "https://api.dify.ai/v1").strip()
+def get_user_data(user_id):
+  try:
+    res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json")
+    if res.status_code == 200 and res.json():
+      return res.json()
+  except Exception:
+    pass
+  return {"trials": 0, "expiry_date": "", "lang": "ar"}
 
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-@bot.message_handler(commands=['start', 'help'])
+def update_user_data(user_id, data):
+  try:
+    requests.patch(f"{FIREBASE_URL}/users/{user_id}.json", json=data)
+  except Exception:
+    pass
+
+
+@bot.message_handler(commands=["start"])
 def send_welcome(message):
-    bot.reply_to(message, "أهلاً بك! أرسل لي أي استفسار أو صورة شارت للتحليل.")
+  markup = types.InlineKeyboardMarkup(row_width=2)
+  btn_ar = types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
+  btn_en = types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
+  markup.add(btn_ar, btn_en)
 
-@bot.message_handler(content_types=['text'])
-def handle_text(message):
-    try:
-        headers = {
-            "Authorization": f"Bearer {DIFY_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "inputs": {},
-            "query": message.text,
-            "response_mode": "blocking",
-            "user": str(message.chat.id)
-        }
-        res = requests.post(f"{DIFY_BASE_URL}/chat-messages", json=payload, headers=headers)
-        if res.status_code == 200:
-            data = res.json()
-            answer = data.get("answer", "لم أستطع الحصول على إجابة.")
-            bot.reply_to(message, answer)
-        else:
-            bot.reply_to(message, f"خطأ من Dify ({res.status_code}): {res.text}")
-    except Exception as e:
-        bot.reply_to(message, f"حدث خطأ: {str(e)}")
+  bot.send_message(
+      message.chat.id,
+      "مرحباً بك في TradeGuard AI!\nWelcome to TradeGuard AI!\n\nالرجاء"
+      " اختيار لغتك المفضلة:\nPlease select your preferred language:",
+      reply_markup=markup,
+  )
 
-@bot.message_handler(content_types=['photo'])
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
+def set_language(call):
+  user_id = str(call.from_user.id)
+  lang = call.data.split("_")[1]
+  update_user_data(user_id, {"lang": lang})
+
+  if lang == "ar":
+    text = (
+        "✅ تم اختيار اللغة العربية بنجاح.\nأرسل لي الآن صورة لأي شارت وسأقوم"
+        " بتحليله فنياً لك."
+    )
+  else:
+    text = (
+        "✅ English language selected successfully.\nNow send me any chart"
+        " image and I will analyze it for you."
+    )
+
+  bot.answer_callback_query(call.id)
+  bot.edit_message_text(
+      text=text, chat_id=call.message.chat.id, message_id=call.message.message_id
+  )
+
+
+@bot.message_handler(content_types=["photo"])
 def handle_photo(message):
-    try:
-        # جلب رابط الصورة من تليجرام
-        file_info = bot.get_file(message.photo[-1].file_id)
-        file_path = file_info.file_path
-        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-        
-        # تحميل الصورة
-        img_data = requests.get(file_url).content
-        
-        # رفع الصورة إلى Dify
-        files = {'file': ('image.jpg', img_data, 'image/jpeg')}
-        upload_res = requests.post(
-            f"{DIFY_BASE_URL}/files/upload",
-            headers={"Authorization": f"Bearer {DIFY_API_KEY}"},
-            files=files,
-            data={"user": str(message.chat.id)}
-        )
-        
-        if upload_res.status_code in [200, 201]:
-            file_id = upload_res.json().get("id")
-            
-            # إرسال طلب التحليل للصورة
-            payload = {
-                "inputs": {},
-                "query": "قم بتحليل هذه الصورة أو الشارت بالتفصيل واستخراج مناطق الدعم والمقاومة والاتجاه.",
-                "response_mode": "blocking",
-                "user": str(message.chat.id),
-                "files": [
-                    {
-                        "type": "image",
-                        "transfer_method": "local_file",
-                        "upload_file_id": file_id
-                    }
-                ]
-            }
-            chat_res = requests.post(
-                f"{DIFY_BASE_URL}/chat-messages",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {DIFY_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-            )
-            if chat_res.status_code == 200:
-                answer = chat_res.json().get("answer", "تم تحليل الصورة.")
-                bot.reply_to(message, answer)
-            else:
-                bot.reply_to(message, f"خطأ في التحليل ({chat_res.status_code}): {chat_res.text}")
-        else:
-            # طباعة الخطأ الدقيق للرفع
-            bot.reply_to(message, f"فشل الرفع ({upload_res.status_code}): {upload_res.text}")
-    except Exception as e:
-        bot.reply_to(message, f"حدث خطأ في النظام: {str(e)}")
+  user_id = str(message.from_user.id)
+  user_data = get_user_data(user_id)
 
-if __name__ == '__main__':
-    bot.infinity_polling()
+  trials = user_data.get("trials", 0)
+  expiry_date_str = user_data.get("expiry_date", "")
+  lang = user_data.get("lang", "ar")
+
+  is_subscribed = False
+  if expiry_date_str:
+    try:
+      if datetime.now() < datetime.fromisoformat(expiry_date_str):
+        is_subscribed = True
+    except Exception:
+      pass
+
+  if not is_subscribed and trials >= 3:
+    if lang == "ar":
+      sub_msg = (
+          "⚠️ **انتهت محاولاتك المجانية الثلاث!**\n\nللاستمرار في تلقي تحليلات"
+          " غير محدودة، اختر إحدى باقاتنا:\n🥉 **باقة 10 أيام:** 15$\n🏆"
+          " **الباقة الشهرية:** 38$\n\n💳 **الدفع عبر TON:**\n"
+          f"`{WALLET_TON}`\n\nأرسل لقطة شاشة للتحويل هنا لتفعيل حسابك."
+      )
+    else:
+      sub_msg = (
+          "⚠️ **Your 3 free trials have ended!**\n\nTo continue receiving"
+          " unlimited analysis, choose a plan:\n🥉 **10-Day Plan:** $15\n🏆"
+          " **Monthly Plan:** $38\n\n💳 **Pay via TON:**\n"
+          f"`{WALLET_TON}`\n\nSend a screenshot of the transfer here to activate"
+          " your account."
+      )
+    bot.reply_to(message, sub_msg, parse_mode="Markdown")
+    return
+
+  loading_text = (
+      "⏳ جاري رفع الصورة وتحليل الشارت بدقة..."
+      if lang == "ar"
+      else "⏳ Uploading image and analyzing chart..."
+  )
+  msg = bot.reply_to(message, loading_text)
+
+  try:
+    file_info = bot.get_file(message.photo[-1].file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
+
+    files = [("file", ("chart.jpg", downloaded_file, "image/jpeg"))]
+    query_text = (
+        "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
+        if lang == "ar"
+        else "Analyze this chart in detail with technical indicators in English."
+    )
+    payload = {
+        "inputs": {},
+        "query": query_text,
+        "response_mode": "blocking",
+        "user": user_id,
+    }
+    headers = {"Authorization": f"Bearer {DIFY_API_KEY}"}
+
+    response = requests.post(
+        DIFY_URL, headers=headers, data=payload, files=files, timeout=60
+    )
+    result = response.json()
+
+    if response.status_code == 200:
+      answer = result.get(
+          "answer",
+          (
+              "عذراً، لم يتمكن النظام من قراءة التحليل."
+              if lang == "ar"
+              else "Sorry, the system couldn't read the analysis."
+          ),
+      )
+      bot.edit_message_text(
+          chat_id=message.chat.id, message_id=msg.message_id, text=answer
+      )
+
+      if not is_subscribed:
+        new_trials = trials + 1
+        update_user_data(user_id, {"trials": new_trials})
+        remaining = 3 - new_trials
+        if remaining > 0:
+          rem_msg = (
+              f"ℹ️ لديك {remaining} محاولات مجانية متبقية."
+              if lang == "ar"
+              else f"ℹ️ You have {remaining} free trials remaining."
+          )
+          bot.send_message(message.chat.id, rem_msg)
+    else:
+      err_msg = (
+          f"❌ فشل الرفع: {result.get('message', 'خطأ')}"
+          if lang == "ar"
+          else f"❌ Error: {result.get('message', 'Unknown error')}"
+      )
+      bot.edit_message_text(
+          chat_id=message.chat.id, message_id=msg.message_id, text=err_msg
+      )
+
+  except Exception as e:
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=msg.message_id,
+        text=f"❌ Error: {str(e)}",
+    )
+
+
+if __name__ == "__main__":
+  bot.infinity_polling()
