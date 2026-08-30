@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta
-import json
+from datetime import datetime
 import os
 import threading
 from flask import Flask
@@ -27,82 +26,108 @@ def run_flask():
 
 
 def get_user_data(user_id):
+  if not FIREBASE_URL:
+    return {"trials": 0, "expiry_date": "", "lang": "ar"}
   try:
-    res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json", timeout=10)
+    res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json", timeout=3)
     if res.status_code == 200 and res.json():
       return res.json()
-  except Exception:
-    pass
+  except Exception as e:
+    print(f"Firebase fetch error: {e}")
   return {"trials": 0, "expiry_date": "", "lang": "ar"}
 
 
 def update_user_data(user_id, data):
+  if not FIREBASE_URL:
+    return
   try:
-    requests.patch(
-        f"{FIREBASE_URL}/users/{user_id}.json", json=data, timeout=10
-    )
-  except Exception:
-    pass
+    requests.patch(f"{FIREBASE_URL}/users/{user_id}.json", json=data, timeout=3)
+  except Exception as e:
+    print(f"Firebase update error: {e}")
 
 
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
-  user_id = str(message.from_user.id)
-  user_data = get_user_data(user_id)
-  trials = user_data.get("trials", 0)
-  expiry_date_str = user_data.get("expiry_date", "")
+  try:
+    user_id = str(message.from_user.id)
+    user_data = get_user_data(user_id)
+    trials = user_data.get("trials", 0)
+    expiry_date_str = user_data.get("expiry_date", "")
 
-  is_subscribed = False
-  if expiry_date_str:
-    try:
-      if datetime.now() < datetime.fromisoformat(expiry_date_str):
-        is_subscribed = True
-    except Exception:
-      pass
+    is_subscribed = False
+    if expiry_date_str:
+      try:
+        if datetime.now() < datetime.fromisoformat(expiry_date_str):
+          is_subscribed = True
+      except Exception:
+        pass
 
-  remaining = "غير محدود (مشترك) ♾️" if is_subscribed else f"{max(0, 3 - trials)} من 3"
-  remaining_en = "Unlimited (Subscribed) ♾️" if is_subscribed else f"{max(0, 3 - trials)} of 3"
+    remaining = (
+        "غير محدود (مشترك) ♾️" if is_subscribed else f"{max(0, 3 - trials)} من 3"
+    )
+    remaining_en = (
+        "Unlimited (Subscribed) ♾️"
+        if is_subscribed
+        else f"{max(0, 3 - trials)} of 3"
+    )
 
-  markup = types.InlineKeyboardMarkup(row_width=2)
-  btn_ar = types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
-  btn_en = types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
-  markup.add(btn_ar, btn_en)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_ar = types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
+    btn_en = types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
+    markup.add(btn_ar, btn_en)
 
-  welcome_text = (
-      f"مرحباً بك في TradeGuard AI!\n"
-      f"Welcome to TradeGuard AI!\n\n"
-      f"📊 المحاولات المتبقية: {remaining}\n"
-      f"📊 Remaining trials: {remaining_en}\n\n"
-      f"الرجاء اختيار لغتك المفضلة:\n"
-      f"Please select your preferred language:"
-  )
+    welcome_text = (
+        f"مرحباً بك في TradeGuard AI!\n"
+        f"Welcome to TradeGuard AI!\n\n"
+        f"📊 المحاولات المتبقية: {remaining}\n"
+        f"📊 Remaining trials: {remaining_en}\n\n"
+        f"الرجاء اختيار لغتك المفضلة:\n"
+        f"Please select your preferred language:"
+    )
 
-  bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
+    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
+  except Exception as e:
+    print(f"Error in start command: {e}")
+    # رد احتياطي مباشر في حال حدوث خطأ
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
+        types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
+    )
+    bot.send_message(
+        message.chat.id,
+        "مرحباً بك في TradeGuard AI!\nPlease select your language / اختر"
+        " لغتك:",
+        reply_markup=markup,
+    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
 def set_language(call):
-  user_id = str(call.from_user.id)
-  lang = call.data.split("_")[1]
-  update_user_data(user_id, {"lang": lang})
+  try:
+    user_id = str(call.from_user.id)
+    lang = call.data.split("_")[1]
+    update_user_data(user_id, {"lang": lang})
 
-  if lang == "ar":
-    text = (
-        "✅ تم اختيار اللغة العربية بنجاح.\nأرسل لي الآن صورة لأي شارت وسأقوم"
-        " بتحليله فنياً لك."
-    )
-  else:
-    text = (
-        "✅ English language selected successfully.\nNow send me any chart"
-        " image and I will analyze it for you."
-    )
+    if lang == "ar":
+      text = (
+          "✅ تم اختيار اللغة العربية بنجاح.\nأرسل لي الآن صورة لأي شارت وسأقوم"
+          " بتحليله فنياً لك."
+      )
+    else:
+      text = (
+          "✅ English language selected successfully.\nNow send me any chart"
+          " image and I will analyze it for you."
+      )
 
-  bot.answer_callback_query(call.id)
-  bot.edit_message_text(
-      text=text,
-      chat_id=call.message.chat.id,
-      message_id=call.message.message_id,
-  )
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        text=text,
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+    )
+  except Exception as e:
+    print(f"Error in callback language: {e}")
 
 
 @bot.message_handler(content_types=["photo"])
@@ -211,15 +236,16 @@ def process_chart_image(message):
     )
 
     chat_url = "https://api.dify.ai/v1/chat-messages"
-    
-    # صياغة أمر مباشر ومشدد للغة المطلوب الرد بها
+
     if lang == "ar":
-      query_text = "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
+      query_text = (
+          "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية حصراً."
+      )
     else:
       query_text = (
-          "CRITICAL REQUIREMENT: Respond entirely and strictly in ENGLISH language only. "
-          "Provide a comprehensive technical analysis for this chart, including overall trend, "
-          "key support and resistance levels, entry scenarios (Buy/Sell), take-profit, stop-loss, and risk advice."
+          "[LANGUAGE: ENGLISH ONLY]\nDo NOT use Arabic. Analyze this chart"
+          " strictly in English. Include: 1. Overall Trend 2. Key Support &"
+          " Resistance 3. Trade Setup (Buy/Sell, Entry, TP, SL)."
       )
 
     payload = {
@@ -261,7 +287,6 @@ def process_chart_image(message):
         chat_id=message.chat.id, message_id=msg.message_id, text=answer
     )
 
-    # احتساب المحاولة وتحديث البيانات بعد نجاح التحليل
     if not is_subscribed:
       new_trials = trials + 1
       update_user_data(user_id, {"trials": new_trials})
@@ -284,4 +309,4 @@ def process_chart_image(message):
 
 if __name__ == "__main__":
   threading.Thread(target=run_flask).start()
-  bot.infinity_polling()
+  bot.infinity_polling(skip_pending=True)
