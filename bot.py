@@ -8,32 +8,26 @@ TOKEN = "8965396208:AAGN062Yh8u9H76gH_wQ4lfnvdgE8dCEt5w"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# قاعدة بيانات مؤقتة للمستخدمين
 users_data = {}
-
-# بياناتك الشخصية المعتمدة
 WALLET_ADDRESS = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
 ADMIN_ID = 8655689754
 ADMIN_USERNAME = "@TradeGuard_Admin"
 
 
-# خادم الويب الأساسي لإرضاء منصة Render وبقائها متصلة
 @app.route("/", methods=["GET"])
 def index():
   return "Bot is alive and running successfully!", 200
 
 
-# تشغيل البوت بنظام الـ Polling في الخلفية لضمان الاستجابة الفورية لأي رسالة
 def run_bot():
   try:
-    bot.remove_webhook()  # مسح أي ويب هوك قديم قد يعطل البوت
+    bot.remove_webhook()
     print("Starting bot polling...")
     bot.infinity_polling(skip_pending=True)
   except Exception as e:
     print(f"Polling error: {e}")
 
 
-# تشغيل خيط البوت في الخلفية مع خادم الويب
 threading.Thread(target=run_bot, daemon=True).start()
 
 
@@ -43,88 +37,77 @@ def send_welcome(message):
   if user_id not in users_data:
     users_data[user_id] = {"trials": 3, "lang": "ar", "subscribed": False}
 
-  markup = types.InlineKeyboardMarkup(row_width=2)
-  markup.add(
-      types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
-      types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
-  )
+  # أزرار واضحة تظهر أسفل لوحة المفاتيح مباشرة لضمان عدم ضياعها
+  markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+  markup.add("🇸🇦 العربية", "🇬🇧 English")
 
   welcome_text = (
       f"أهلاً بك في بوت التحليل الذكي للأسواق المالية!\n"
       f"معرفك الخاص (ID): `{user_id}`\n\n"
-      f"الرجاء اختيار لغة التحليل المفضلة لديك:\n"
-      f"Please choose your preferred analysis language:"
+      f"الرجاء اختيار لغة التحليل بالضغط على الزر أسفل الشات:"
   )
-  bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
+  bot.send_message(
+      message.chat.id, welcome_text, reply_markup=markup, parse_mode="Markdown"
+  )
 
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-  user_id = call.from_user.id
+@bot.message_handler(func=lambda msg: msg.text in ["🇸🇦 العربية", "عربي", "العربية"])
+def set_lang_ar(message):
+  user_id = message.from_user.id
   if user_id not in users_data:
     users_data[user_id] = {"trials": 3, "lang": "ar", "subscribed": False}
+  users_data[user_id]["lang"] = "ar"
+  show_main_menu(message, "ar")
 
-  if call.data == "lang_ar":
-    users_data[user_id]["lang"] = "ar"
-    bot.answer_callback_query(call.id, "تم اختيار اللغة العربية.")
-    show_main_menu(call.message, "ar")
-  elif call.data == "lang_en":
-    users_data[user_id]["lang"] = "en"
-    bot.answer_callback_query(call.id, "English selected.")
-    show_main_menu(call.message, "en")
-  elif call.data == "check_account":
-    show_account_info(call.message, user_id)
-  elif call.data == "subscribe_menu":
-    show_subscription_plans(call.message, users_data[user_id]["lang"])
+
+@bot.message_handler(func=lambda msg: msg.text in ["🇬🇧 English", "English"])
+def set_lang_en(message):
+  user_id = message.from_user.id
+  if user_id not in users_data:
+    users_data[user_id] = {"trials": 3, "lang": "ar", "subscribed": False}
+  users_data[user_id]["lang"] = "en"
+  show_main_menu(message, "en")
+
+
+@bot.message_handler(
+    func=lambda msg: msg.text in ["📊 حسابي ومعلوماتي", "📊 My Account & Info"]
+)
+def handle_account_button(message):
+  show_account_info(message, message.from_user.id)
+
+
+@bot.message_handler(
+    func=lambda msg: msg.text in ["💎 خطط الاشتراكات", "💎 Subscription Plans"]
+)
+def handle_sub_button(message):
+  user_id = message.from_user.id
+  lang = users_data.get(user_id, {}).get("lang", "ar")
+  show_subscription_plans(message, lang)
 
 
 def show_main_menu(message, lang):
-  markup = types.InlineKeyboardMarkup(row_width=1)
+  markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
   if lang == "ar":
-    markup.add(
-        types.InlineKeyboardButton("📊 حسابي ومعلوماتي", callback_data="check_account"),
-        types.InlineKeyboardButton("💎 خطط الاشتراكات", callback_data="subscribe_menu"),
+    markup.add("📊 حسابي ومعلوماتي", "💎 خطط الاشتراكات")
+    bot.send_message(
+        message.chat.id,
+        "تم اختيار اللغة العربية بنجاح ✅.\nالقائمة الرئيسية جاهزة. أرسل صورة"
+        " الشارت الآن وسيقوم البوت بتحليله!",
+        reply_markup=markup,
     )
-    try:
-      bot.edit_message_text(
-          "القائمة الرئيسية جاهزة.\nأرسل صورة الشارت الآن وسيقوم البوت بتحليله"
-          " باللغة العربية!",
-          message.chat.id,
-          message.message_id,
-          reply_markup=markup,
-      )
-    except Exception:
-      bot.send_message(
-          message.chat.id,
-          "القائمة الرئيسية جاهزة.\nأرسل صورة الشارت الآن وسيقوم البوت بتحليله"
-          " باللغة العربية!",
-          reply_markup=markup,
-      )
   else:
-    markup.add(
-        types.InlineKeyboardButton(
-            "📊 My Account & Info", callback_data="check_account"
-        ),
-        types.InlineKeyboardButton(
-            "💎 Subscription Plans", callback_data="subscribe_menu"
-        ),
+    markup.add("📊 My Account & Info", "💎 Subscription Plans")
+    bot.send_message(
+        message.chat.id,
+        "English selected successfully ✅.\nMain menu ready. Send the chart"
+        " image now to analyze!",
+        reply_markup=markup,
     )
-    try:
-      bot.edit_message_text(
-          "Main menu ready.\nSend the chart image now to analyze in English!",
-          message.chat.id,
-          message.message_id,
-          reply_markup=markup,
-      )
-    except Exception:
-      bot.send_message(
-          message.chat.id,
-          "Main menu ready.\nSend the chart image now to analyze in English!",
-          reply_markup=markup,
-      )
 
 
 def show_account_info(message, user_id):
+  if user_id not in users_data:
+    users_data[user_id] = {"trials": 3, "lang": "ar", "subscribed": False}
   user = users_data[user_id]
   lang = user["lang"]
   trials = user["trials"]
