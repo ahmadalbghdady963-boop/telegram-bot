@@ -5,6 +5,7 @@ from flask import Flask
 import requests
 from telebot import TeleBot, types
 
+# جلب المتغيرات
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 DIFY_API_KEY = os.getenv("DIFY_API_KEY")
 FIREBASE_URL = os.getenv("FIREBASE_URL")
@@ -21,8 +22,9 @@ def home():
   return "TradeGuard AI Bot is active and running!"
 
 
-def run_flask():
-  app.run(host="0.0.0.0", port=PORT)
+@app.route("/health")
+def health():
+  return "OK", 200
 
 
 def get_user_data(user_id):
@@ -88,18 +90,6 @@ def send_welcome(message):
     bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
   except Exception as e:
     print(f"Error in start command: {e}")
-    # رد احتياطي مباشر في حال حدوث خطأ
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
-        types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"),
-    )
-    bot.send_message(
-        message.chat.id,
-        "مرحباً بك في TradeGuard AI!\nPlease select your language / اختر"
-        " لغتك:",
-        reply_markup=markup,
-    )
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
@@ -307,6 +297,18 @@ def process_chart_image(message):
     )
 
 
+# دالة تشغيل البوت في الخلفية
+def start_bot_polling():
+  try:
+    bot.remove_webhook()
+  except Exception as e:
+    print(f"Webhook remove warning: {e}")
+  print("Starting Telegram Bot Polling...")
+  bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
+
+
+# تفعيل البوت مباشرة فور تحميل الملف على Render
+threading.Thread(target=start_bot_polling, daemon=True).start()
+
 if __name__ == "__main__":
-  threading.Thread(target=run_flask).start()
-  bot.infinity_polling(skip_pending=True)
+  app.run(host="0.0.0.0", port=PORT)
