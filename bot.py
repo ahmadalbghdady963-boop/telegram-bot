@@ -79,7 +79,9 @@ def set_language(call):
 
   bot.answer_callback_query(call.id)
   bot.edit_message_text(
-      text=text, chat_id=call.message.chat.id, message_id=call.message.message_id
+      text=text,
+      chat_id=call.message.chat.id,
+      message_id=call.message.message_id,
   )
 
 
@@ -121,14 +123,37 @@ def handle_photo(message):
 
   msg = bot.reply_to(
       message,
-      "⏳ جاري رفع الصورة إلى الخادم..."
+      "⏳ جاري تحميل الصورة..."
       if lang == "ar"
-      else "⏳ Uploading image to server...",
+      else "⏳ Downloading image...",
   )
 
   try:
-    file_info = bot.get_file(message.photo[-1].file_id)
-    downloaded_file = bot.download_file(file_info.file_path)
+    # جلب مسار ورابط الصورة من تيليجرام مباشرة مع Timeout لمنع التعليق
+    file_id = message.photo[-1].file_id
+    file_info_url = (
+        f"https://api.telegram.org/bot{TOKEN}/getFile?file_id={file_id}"
+    )
+    file_res = requests.get(file_info_url, timeout=10).json()
+
+    if not file_res.get("ok"):
+      raise Exception("Failed to fetch file info from Telegram")
+
+    file_path = file_res["result"]["file_path"]
+    download_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+
+    img_res = requests.get(download_url, timeout=30)
+    downloaded_file = img_res.content
+
+    bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=msg.message_id,
+        text=(
+            "⏳ جاري رفع الصورة إلى الخادم..."
+            if lang == "ar"
+            else "⏳ Uploading image to server...",
+        ),
+    )
 
     # الخطوة 1: رفع الصورة إلى Dify
     upload_url = "https://api.dify.ai/v1/files/upload"
@@ -151,7 +176,7 @@ def handle_photo(message):
       )
 
     upload_result = upload_response.json()
-    file_id = upload_result.get("id")
+    dify_file_id = upload_result.get("id")
 
     bot.edit_message_text(
         chat_id=message.chat.id,
@@ -159,7 +184,7 @@ def handle_photo(message):
         text=(
             "⏳ جاري تحليل الشارت فنياً..."
             if lang == "ar"
-            else "⏳ Analyzing chart technically..."
+            else "⏳ Analyzing chart technically...",
         ),
     )
 
@@ -179,7 +204,7 @@ def handle_photo(message):
         "files": [{
             "type": "image",
             "transfer_method": "local_file",
-            "upload_file_id": file_id,
+            "upload_file_id": dify_file_id,
         }],
     }
 
