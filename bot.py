@@ -16,6 +16,9 @@ WALLET_TON = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
 
 app = Flask(__name__)
 
+# ذاكرة محلية لحفظ حالة المستخدمين فورياً
+USER_CACHE = {}
+
 
 @app.route("/")
 def home():
@@ -28,24 +31,37 @@ def health():
 
 
 def get_user_data(user_id):
-  if not FIREBASE_URL:
-    return {"trials": 0, "expiry_date": "", "lang": "ar"}
-  try:
-    res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json", timeout=3)
-    if res.status_code == 200 and res.json():
-      return res.json()
-  except Exception as e:
-    print(f"Firebase fetch error: {e}")
-  return {"trials": 0, "expiry_date": "", "lang": "ar"}
+  # التحقق أولاً من الذاكرة المحلية
+  if user_id not in USER_CACHE:
+    USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
+
+  # جلب البيانات من Firebase إن وجد
+  if FIREBASE_URL:
+    try:
+      res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json", timeout=3)
+      if res.status_code == 200 and res.json():
+        USER_CACHE[user_id].update(res.json())
+    except Exception as e:
+      print(f"Firebase fetch error: {e}")
+
+  return USER_CACHE[user_id]
 
 
 def update_user_data(user_id, data):
-  if not FIREBASE_URL:
-    return
-  try:
-    requests.patch(f"{FIREBASE_URL}/users/{user_id}.json", json=data, timeout=3)
-  except Exception as e:
-    print(f"Firebase update error: {e}")
+  # تحديث الذاكرة المحلية فوراً
+  if user_id not in USER_CACHE:
+    USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
+
+  USER_CACHE[user_id].update(data)
+
+  # تحديث Firebase إن وجد
+  if FIREBASE_URL:
+    try:
+      requests.patch(
+          f"{FIREBASE_URL}/users/{user_id}.json", json=data, timeout=3
+      )
+    except Exception as e:
+      print(f"Firebase update error: {e}")
 
 
 @bot.message_handler(commands=["start"])
@@ -64,7 +80,7 @@ def send_welcome(message):
       except Exception:
         pass
 
-    remaining = (
+    remaining_ar = (
         "غير محدود (مشترك) ♾️" if is_subscribed else f"{max(0, 3 - trials)} من 3"
     )
     remaining_en = (
@@ -81,7 +97,7 @@ def send_welcome(message):
     welcome_text = (
         f"مرحباً بك في TradeGuard AI!\n"
         f"Welcome to TradeGuard AI!\n\n"
-        f"📊 المحاولات المتبقية: {remaining}\n"
+        f"📊 المحاولات المتبقية: {remaining_ar}\n"
         f"📊 Remaining trials: {remaining_en}\n\n"
         f"الرجاء اختيار لغتك المفضلة:\n"
         f"Please select your preferred language:"
@@ -233,9 +249,10 @@ def process_chart_image(message):
       )
     else:
       query_text = (
-          "[LANGUAGE: ENGLISH ONLY]\nDo NOT use Arabic. Analyze this chart"
-          " strictly in English. Include: 1. Overall Trend 2. Key Support &"
-          " Resistance 3. Trade Setup (Buy/Sell, Entry, TP, SL)."
+          "CRITICAL INSTRUCTION: Respond strictly and entirely in ENGLISH."
+          " Do NOT use any Arabic words.\nAnalyze this chart in detail"
+          " including: Trend, Key Support & Resistance, Entry, Take Profit, and"
+          " Stop Loss."
       )
 
     payload = {
@@ -277,17 +294,18 @@ def process_chart_image(message):
         chat_id=message.chat.id, message_id=msg.message_id, text=answer
     )
 
+    # خصم المحاولة وتحديث البيانات
     if not is_subscribed:
       new_trials = trials + 1
       update_user_data(user_id, {"trials": new_trials})
-      remaining = 3 - new_trials
-      if remaining > 0:
-        rem_msg = (
-            f"ℹ️ لديك {remaining} محاولات مجانية متبقية."
-            if lang == "ar"
-            else f"ℹ️ You have {remaining} free trials remaining."
-        )
-        bot.send_message(message.chat.id, rem_msg)
+      remaining = max(0, 3 - new_trials)
+
+      rem_msg = (
+          f"ℹ️ لديك {remaining} محاولات مجانية متبقية."
+          if lang == "ar"
+          else f"ℹ️ You have {remaining} free trials remaining."
+      )
+      bot.send_message(message.chat.id, rem_msg)
 
   except Exception as e:
     bot.edit_message_text(
@@ -307,7 +325,7 @@ def start_bot_polling():
   bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=20)
 
 
-# تفعيل البوت مباشرة فور تحميل الملف على Render
+# تفعيل البوت مباشرة
 threading.Thread(target=start_bot_polling, daemon=True).start()
 
 if __name__ == "__main__":
