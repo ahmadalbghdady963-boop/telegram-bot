@@ -128,7 +128,7 @@ def handle_photo(message):
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
 
-    # الخطوة 1: رفع الصورة إلى Dify للحصول على file_id
+    # الخطوة 1: رفع الصورة إلى Dify
     upload_url = "https://api.dify.ai/v1/files/upload"
     headers_upload = {"Authorization": f"Bearer {DIFY_API_KEY}"}
     files_data = {"file": ("chart.jpg", downloaded_file, "image/jpeg")}
@@ -141,16 +141,17 @@ def handle_photo(message):
         data=data_upload,
         timeout=60,
     )
-    upload_result = upload_response.json()
 
     if upload_response.status_code not in [200, 201]:
       raise Exception(
-          f"File upload failed: {upload_result.get('message', 'Unknown error')}"
+          f"Upload failed [{upload_response.status_code}]:"
+          f" {upload_response.text}"
       )
 
+    upload_result = upload_response.json()
     file_id = upload_result.get("id")
 
-    # الخطوة 2: إرسال طلب الشات مع معرف الملف بصيغة JSON
+    # الخطوة 2: إرسال الشات
     chat_url = "https://api.dify.ai/v1/chat-messages"
     query_text = (
         "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
@@ -178,41 +179,36 @@ def handle_photo(message):
     response = requests.post(
         chat_url, headers=headers_chat, json=payload, timeout=60
     )
+
+    if response.status_code != 200:
+      raise Exception(
+          f"Chat API failed [{response.status_code}]: {response.text}"
+      )
+
     result = response.json()
+    answer = result.get(
+        "answer",
+        (
+            "عذراً، لم يتمكن النظام من قراءة التحليل."
+            if lang == "ar"
+            else "Sorry, the system couldn't read the analysis."
+        ),
+    )
+    bot.edit_message_text(
+        chat_id=message.chat.id, message_id=msg.message_id, text=answer
+    )
 
-    if response.status_code == 200:
-      answer = result.get(
-          "answer",
-          (
-              "عذراً، لم يتمكن النظام من قراءة التحليل."
-              if lang == "ar"
-              else "Sorry, the system couldn't read the analysis."
-          ),
-      )
-      bot.edit_message_text(
-          chat_id=message.chat.id, message_id=msg.message_id, text=answer
-      )
-
-      if not is_subscribed:
-        new_trials = trials + 1
-        update_user_data(user_id, {"trials": new_trials})
-        remaining = 3 - new_trials
-        if remaining > 0:
-          rem_msg = (
-              f"ℹ️ لديك {remaining} محاولات مجانية متبقية."
-              if lang == "ar"
-              else f"ℹ️ You have {remaining} free trials remaining."
-          )
-          bot.send_message(message.chat.id, rem_msg)
-    else:
-      err_msg = (
-          f"❌ فشل التحليل: {result.get('message', 'خطأ')}"
-          if lang == "ar"
-          else f"❌ Error: {result.get('message', 'Unknown error')}"
-      )
-      bot.edit_message_text(
-          chat_id=message.chat.id, message_id=msg.message_id, text=err_msg
-      )
+    if not is_subscribed:
+      new_trials = trials + 1
+      update_user_data(user_id, {"trials": new_trials})
+      remaining = 3 - new_trials
+      if remaining > 0:
+        rem_msg = (
+            f"ℹ️ لديك {remaining} محاولات مجانية متبقية."
+            if lang == "ar"
+            else f"ℹ️ You have {remaining} free trials remaining."
+        )
+        bot.send_message(message.chat.id, rem_msg)
 
   except Exception as e:
     bot.edit_message_text(
