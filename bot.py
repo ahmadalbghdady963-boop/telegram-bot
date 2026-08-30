@@ -47,17 +47,37 @@ def update_user_data(user_id, data):
 
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
+  user_id = str(message.from_user.id)
+  user_data = get_user_data(user_id)
+  trials = user_data.get("trials", 0)
+  expiry_date_str = user_data.get("expiry_date", "")
+
+  is_subscribed = False
+  if expiry_date_str:
+    try:
+      if datetime.now() < datetime.fromisoformat(expiry_date_str):
+        is_subscribed = True
+    except Exception:
+      pass
+
+  remaining = "غير محدود (مشترك) ♾️" if is_subscribed else f"{max(0, 3 - trials)} من 3"
+  remaining_en = "Unlimited (Subscribed) ♾️" if is_subscribed else f"{max(0, 3 - trials)} of 3"
+
   markup = types.InlineKeyboardMarkup(row_width=2)
   btn_ar = types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
   btn_en = types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
   markup.add(btn_ar, btn_en)
 
-  bot.send_message(
-      message.chat.id,
-      "مرحباً بك في TradeGuard AI!\nWelcome to TradeGuard AI!\n\nالرجاء"
-      " اختيار لغتك المفضلة:\nPlease select your preferred language:",
-      reply_markup=markup,
+  welcome_text = (
+      f"مرحباً بك في TradeGuard AI!\n"
+      f"Welcome to TradeGuard AI!\n\n"
+      f"📊 المحاولات المتبقية: {remaining}\n"
+      f"📊 Remaining trials: {remaining_en}\n\n"
+      f"الرجاء اختيار لغتك المفضلة:\n"
+      f"Please select your preferred language:"
   )
+
+  bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
@@ -179,7 +199,6 @@ def process_chart_image(message):
 
     upload_result = upload_response.json()
     dify_file_id = upload_result.get("id")
-    print(f"Debug: Image uploaded successfully, Dify file ID: {dify_file_id}")
 
     bot.edit_message_text(
         chat_id=message.chat.id,
@@ -192,11 +211,16 @@ def process_chart_image(message):
     )
 
     chat_url = "https://api.dify.ai/v1/chat-messages"
-    query_text = (
-        "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
-        if lang == "ar"
-        else "Analyze this chart in detail with technical indicators in English."
-    )
+    
+    # صياغة أمر مباشر ومشدد للغة المطلوب الرد بها
+    if lang == "ar":
+      query_text = "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية."
+    else:
+      query_text = (
+          "CRITICAL REQUIREMENT: Respond entirely and strictly in ENGLISH language only. "
+          "Provide a comprehensive technical analysis for this chart, including overall trend, "
+          "key support and resistance levels, entry scenarios (Buy/Sell), take-profit, stop-loss, and risk advice."
+      )
 
     payload = {
         "inputs": {},
@@ -215,13 +239,8 @@ def process_chart_image(message):
         "Content-Type": "application/json",
     }
 
-    print("Debug: Sending request to Dify chat-messages API...")
     response = requests.post(
         chat_url, headers=headers_chat, json=payload, timeout=90
-    )
-    print(
-        f"Debug: Dify chat response status code: {response.status_code},"
-        f" text: {response.text[:200]}"
     )
 
     if response.status_code != 200:
@@ -242,6 +261,7 @@ def process_chart_image(message):
         chat_id=message.chat.id, message_id=msg.message_id, text=answer
     )
 
+    # احتساب المحاولة وتحديث البيانات بعد نجاح التحليل
     if not is_subscribed:
       new_trials = trials + 1
       update_user_data(user_id, {"trials": new_trials})
@@ -255,7 +275,6 @@ def process_chart_image(message):
         bot.send_message(message.chat.id, rem_msg)
 
   except Exception as e:
-    print(f"Error encountered: {str(e)}")
     bot.edit_message_text(
         chat_id=message.chat.id,
         message_id=msg.message_id,
