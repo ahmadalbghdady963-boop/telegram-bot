@@ -12,16 +12,21 @@ app = Flask(__name__)
 # قاعدة بيانات مؤقتة للمستخدمين
 users_data = {}
 
-# عنوان المحفظة الخاص بك (ضع عنوان محفظتك الحقيقي هنا)
-WALLET_ADDRESS = "TXxxxxxxxxxxxxxxxxxxxxxxxxxxx (TRC20 - USDT)"
+# بياناتك الشخصية المعتمدة
+WALLET_ADDRESS = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
+ADMIN_ID = 8655689754
+ADMIN_USERNAME = "@TradeGuard_Admin"
 
-# الآيدي الخاص بك كمسؤول (للتفعيل اليدوي للمشتركين)
-ADMIN_ID = (
-    123456789  # استبدل هذا الرقم بالـ ID الحقيقي الخاص بك على تيليجرام
-)
+# تسجيل الويب هوك تلقائياً للعمل مع Render
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
+if RENDER_URL:
+  try:
+    bot.remove_webhook()
+    bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
+  except Exception as e:
+    print(f"Error setting webhook: {e}")
 
 
-# مسار الويب هوك المتوافق مع خوادم Render
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
   if request.headers.get("content-type") == "application/json":
@@ -150,27 +155,25 @@ def show_subscription_plans(message, lang):
         f"💎 **خطط الاشتراكات والأسعار:**\n\n"
         f"1️⃣ **اشتراك 10 أيام:** `15 دولاراً`\n"
         f"2️⃣ **اشتراك شهري (30 يوماً):** `38 دولاراً`\n\n"
-        f"💳 **طريقة الدفع:**\n"
-        f"قم بتحويل المبلغ المطلوبة إلى عنوان محفظتنا (USDT - TRC20):\n"
-        f"`{WALLET_ADDRESS}`\n\n"
-        f"📩 بعد التحويل، أرسل صورة إيصال الدفع مع الـ ID الخاص بك إلى الإدارة لتفعيل"
-        f" اشتراكك فوراً."
+        f"💳 **طريقة الدفع (شبكة TON):**\n"
+        f"عنوان المحفظة:\n`{WALLET_ADDRESS}`\n\n"
+        f"📩 بعد التحويل، أرسل صورة إيصال الدفع مع الـ ID الخاص بك إلى حساب الأدمن"
+        f" لتفعيل اشتراكك:\n{ADMIN_USERNAME}"
     )
   else:
     text = (
         f"💎 **Subscription Plans & Pricing:**\n\n"
         f"1️⃣ **10 Days Plan:** `$15`\n"
         f"2️⃣ **Monthly Plan (30 Days):** `$38`\n\n"
-        f"💳 **Payment Method:**\n"
-        f"Transfer the exact amount to our wallet address (USDT - TRC20):\n"
-        f"`{WALLET_ADDRESS}`\n\n"
-        f"📩 After payment, send the receipt screenshot and your ID to support"
-        f" for activation."
+        f"💳 **Payment Method (TON Network):**\n"
+        f"Wallet Address:\n`{WALLET_ADDRESS}`\n\n"
+        f"📩 After payment, send the receipt and your ID to admin for"
+        f" activation:\n{ADMIN_USERNAME}"
     )
   bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
 
-# أمر خاص بالأدمن لتفعيل المشتركين يدوياً: /activate <user_id>
+# أمر التفعيل اليدوي للأدمن: /activate <user_id>
 @bot.message_handler(commands=["activate"])
 def admin_activate(message):
   if message.from_user.id != ADMIN_ID:
@@ -196,7 +199,6 @@ def admin_activate(message):
     bot.reply_to(message, "خطأ في الصيغة. استخدم الأمر هكذا: /activate <user_id>")
 
 
-# استقبال الصور وتحليلها باللغة المختارة
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
   user_id = message.from_user.id
@@ -210,16 +212,14 @@ def handle_photo(message):
     if lang == "ar":
       bot.reply_to(
           message,
-          "❌ عذراً، لقد نفدت جميع محاولاتك المجانية (3/3).\nللاشتراك ومتابعة"
-          " التحليلات بلا حدود، يرجى مراجعة قسم خطط الاشتراكات (10 أيام بـ 15$"
-          " أو شهرياً بـ 38$).",
+          "❌ عذراً، لقد نفدت جميع محاولاتك المجانية (3/3).\nللاشتراك، يرجى"
+          f" التحويل إلى المحفظة ومراسلة الإدارة عبر: {ADMIN_USERNAME}",
       )
     else:
       bot.reply_to(
           message,
-          "❌ Sorry, your free trials have expired (3/3).\nTo continue"
-          " analysis, please check our subscription plans ($15 for 10 days, $38"
-          " monthly).",
+          "❌ Sorry, your free trials have expired (3/3).\nTo subscribe,"
+          f" please pay and contact admin at: {ADMIN_USERNAME}",
       )
     return
 
@@ -240,12 +240,3 @@ def handle_photo(message):
         f"🔍 Chart received successfully.\nAnalyzing data in English...\n(Remaining"
         f" free trials: {remaining})",
     )
-
-
-if __name__ == "__main__":
-  RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
-  if RENDER_URL:
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{RENDER_URL}/{TOKEN}")
-
-  app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
