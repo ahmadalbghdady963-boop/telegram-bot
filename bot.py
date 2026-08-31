@@ -81,6 +81,8 @@ def handle_photo(message):
         print("Error:", e)
         bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ حدث خطأ داخلي أثناء معالجة الصورة.")
 
+# إغلاق Webhook وتفعيل Polling
 if __name__ == "__main__":
     Thread(target=run_flask).start()
+    bot.remove_webhook()
     bot.polling(none_stop=True)
