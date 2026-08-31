@@ -8,7 +8,7 @@ from telebot import TeleBot, types
 
 # === المتغيرات الأساسية ===
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KPYmR1he14JgJmBsnxEChrJ-2Y0sXI635OWSB2s1pxMQ"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6IDVEMfL9X8L9WxGnbVDZxlESyM8F1pdM8auR63j5Uw0w"
 FIREBASE_URL = os.getenv("FIREBASE_URL")
 PORT = int(os.getenv("PORT", 10000))
 
@@ -44,7 +44,7 @@ def webhook():
     else:
         abort(403)
 
-# === قواعد البيانات آمنة ===
+# === قواعد البيانات ===
 def get_user_data(user_id):
     if user_id not in USER_CACHE:
         USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
@@ -85,7 +85,7 @@ def activate_user(message):
     except:
         bot.reply_to(message, "❌ خطأ. الاستخدام الصحيح: `/activate 123456789 30`", parse_mode="Markdown")
 
-# === أمر البداية مع مسح الأزرار القديمة ===
+# === أمر البداية ===
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     try:
@@ -131,7 +131,7 @@ def set_language(call):
     bot.answer_callback_query(call.id)
     bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id)
 
-# === معالجة الصور عبر Google Gemini المباشر ===
+# === معالجة الصور ومطابقة نوع المفتاح تلقائياً ===
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     threading.Thread(target=process_chart_image, args=(message,)).start()
@@ -175,8 +175,14 @@ def process_chart_image(message):
         downloaded_file = bot.download_file(file_info.file_path)
         base64_image = base64.b64encode(downloaded_file).decode('utf-8')
 
-        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        
+        # التكيف التلقائي مع نوع المفتاح
+        headers = {"Content-Type": "application/json"}
+        if GEMINI_API_KEY and GEMINI_API_KEY.startswith("AQ."):
+            gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+            headers["Authorization"] = f"Bearer {GEMINI_API_KEY}"
+        else:
+            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+
         prompt_text = (
             "أنت خبير تداول وحسابات مالية. قم بتحليل هذا الشارت المالي بدقة (الاتجاه، الدعوم والمقاومات، التوصية)، "
             "ملاحظة مهمة جداً: تنبيه إدارة المخاطر بدقة 85% والمخاطرة 1% إلى 2% هي مسؤوليته. "
@@ -202,7 +208,6 @@ def process_chart_image(message):
             ]
         }
 
-        headers = {"Content-Type": "application/json"}
         response = requests.post(gemini_url, json=payload, headers=headers, timeout=60)
 
         if response.status_code != 200:
@@ -213,7 +218,7 @@ def process_chart_image(message):
         try:
             answer = res_data['candidates'][0]['content']['parts'][0]['text']
         except Exception:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ لم يتم إرجاع تحليل من الذكاء الاصطناعي.")
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text="❌ لم يتم إرجاع تحليل من الذكاء الاصطناعي.")
             return
 
         if "NOT_CHART" in answer:
@@ -248,4 +253,3 @@ setup_webhook()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
-            
