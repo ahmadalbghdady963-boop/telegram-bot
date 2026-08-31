@@ -10,21 +10,18 @@ DIFY_API_KEY = os.getenv("DIFY_API_KEY") or os.getenv("GEMINI_API_KEY")
 DIFY_API_URL = os.getenv("DIFY_API_URL", "https://api.dify.ai/v1")
 FIREBASE_URL = os.getenv("FIREBASE_DB_URL", "").rstrip('/')
 
-# حفظ وسحب سياق المحادثات
 user_conversations = {}
 
 def save_to_firebase(path, data):
-    """حفظ البيانات في Firebase Realtime Database"""
     if not FIREBASE_URL:
         return
     try:
         url = f"{FIREBASE_URL}/{path}.json"
         requests.patch(url, json=data, timeout=5)
     except Exception as e:
-        print(f"خطأ في حفظ البيانات في Firebase: {e}")
+        print(f"خطأ Firebase: {e}")
 
 def send_telegram_message(chat_id, text):
-    """إرسال نص إلى مستخدم تليجرام"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -34,15 +31,13 @@ def send_telegram_message(chat_id, text):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"خطأ في إرسال الرسالة لتليجرام: {e}")
+        print(f"خطأ إرسال تليجرام: {e}")
 
 def send_telegram_action(chat_id, action="typing"):
-    """إظهار حالة جاري الكتابة"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
     requests.post(url, json={"chat_id": chat_id, "action": action})
 
 def upload_photo_to_dify(file_id, user_id):
-    """رفع صورة الشارت إلى Dify"""
     try:
         res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}").json()
         if not res.get("ok"):
@@ -60,11 +55,10 @@ def upload_photo_to_dify(file_id, user_id):
         up_res = requests.post(upload_url, headers=headers, files=files, data=data, timeout=30).json()
         return up_res.get("id")
     except Exception as e:
-        print(f"خطأ في رفع الصورة: {e}")
+        print(f"خطأ رفع الصورة: {e}")
         return None
 
 def call_dify_api(user_id, prompt, upload_file_id=None):
-    """إرسال الطلب لـ Dify والحصول على التحليل"""
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
         "Content-Type": "application/json"
@@ -97,7 +91,6 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
             
             answer = data.get("answer", "لم يتم استلام رد من النموذج.")
             
-            # تسجيل العملية في Firebase
             save_to_firebase(f"logs/{user_id}", {
                 "last_prompt": prompt,
                 "last_response": answer,
@@ -112,8 +105,10 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
         print(f"Exception call: {e}")
         return "تأخر الرد من السيرفر، يرجى المحاولة مرة أخرى."
 
-@app.route('/', methods=['GET', 'POST'])
-def webhook():
+# قبول الطلبات على جميع المسارات الممكنة لمنع خطأ 404
+@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
+@app.route('/<path:path>', methods=['GET', 'POST'])
+def webhook(path):
     if request.method == 'GET':
         return "TradeGuard AI with Firebase is Live!", 200
 
@@ -127,7 +122,6 @@ def webhook():
     first_name = msg["from"].get("first_name", "")
     username = msg["from"].get("username", "")
 
-    # حفظ بيانات المستخدم في Firebase
     save_to_firebase(f"users/{user_id}", {
         "first_name": first_name,
         "username": username,
