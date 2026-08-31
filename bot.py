@@ -96,10 +96,30 @@ def upload_photo_to_dify(file_id, user_id):
         return None, f"❌ خطأ أثناء رفع الصورة: {str(e)}"
 
 def call_dify_api(user_id, prompt, upload_file_id=None):
-    headers = {
-        "Authorization": f"Bearer {DIFY_API_KEY}",
-        "Content-Type": "application/json"
+    headers = {"Authorization": f"Bearer {DIFY_API_KEY}", "Content-Type": "application/json"}
+    files = [{"type": "image", "transfer_method": "local_file", "upload_file_id": upload_file_id}] if upload_file_id else []
+
+    payload = {
+        "inputs": {},
+        "query": prompt if prompt else "حلل هذا الشارت فنياً.",
+        "response_mode": "blocking",
+        "user": str(user_id),
+        "files": files
     }
+
+    try:
+        # رفع مهلة الانتظار إلى 300 ثانية لمنع خطأ 504
+        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=300)
+        if res.status_code == 200:
+            return res.json().get("answer", "لم يتم استلام رد.")
+        elif res.status_code == 504:
+            return "⚠️ عذراً، استغرق الذكاء الاصطناعي وقتاً طويلاً جداً في معالجة الصورة. يرجى إرسال صورة أصغر حجماً أو إعادة المحاولة."
+        return f"❌ خطأ من الذكاء الاصطناعي [{res.status_code}]"
+    except requests.exceptions.Timeout:
+        return "⚠️ انتهت مهلة الانتظار (Timeout). الخادم بطيء في الاستجابة حالياً، يرجى المحاولة لاحقاً."
+    except Exception as e:
+        return f"❌ خطأ بالاتصال: {str(e)}"
+
     
     files = []
     if upload_file_id:
