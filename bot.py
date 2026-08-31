@@ -1,261 +1,143 @@
-from datetime import datetime
 import os
-import threading
-from flask import Flask, request, abort
 import requests
-from telebot import TeleBot, types
-
-# جلب المتغيرات
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-DIFY_API_KEY = os.getenv("DIFY_API_KEY")
-FIREBASE_URL = os.getenv("FIREBASE_URL")
-PORT = int(os.getenv("PORT", 10000))
-
-# رابط تطبيقك على ريندر للربط مع تيليجرام
-RENDER_APP_URL = "https://telegram-bot-pqy3.onrender.com"
-
-bot = TeleBot(TOKEN)
-WALLET_TON = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-USER_CACHE = {}
 
+# استدعاء المتغيرات البيئية
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
+DIFY_API_KEY = os.getenv("DIFY_API_KEY") or os.getenv("GEMINI_API_KEY")
+DIFY_API_URL = os.getenv("DIFY_API_URL", "https://api.dify.ai/v1")
 
-@app.route("/")
-def home():
-  return "TradeGuard AI Bot is active and running with Webhooks!"
+# تخزين رقم المحادثة لكل مستخدم للحفاظ على السياق
+user_conversations = {}
 
-
-@app.route("/health")
-def health():
-  return "OK", 200
-
-
-# مسار الـ Webhook الآمن المخفي
-@app.route(f"/{TOKEN}", methods=['POST'])
-def webhook():
-  if request.headers.get('content-type') == 'application/json':
-    json_string = request.get_data().decode('utf-8')
-    update = types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return '', 200
-  else:
-    abort(403)
-
-
-def get_user_data(user_id):
-  if user_id not in USER_CACHE:
-    USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
-
-  if FIREBASE_URL:
+def send_telegram_message(chat_id, text):
+    """إرسال نص إلى مستخدم تليجرام"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
     try:
-      res = requests.get(f"{FIREBASE_URL}/users/{user_id}.json", timeout=3)
-      if res.status_code == 200 and res.json():
-        USER_CACHE[user_id].update(res.json())
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-      print(f"Firebase fetch error: {e}")
+        print(f"خطأ في إرسال الرسالة لتليجرام: {e}")
 
-  return USER_CACHE[user_id]
+def send_telegram_action(chat_id, action="typing"):
+    """إظهار حالة جاري الكتابة للمستخدم"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
+    requests.post(url, json={"chat_id": chat_id, "action": action})
 
-
-def update_user_data(user_id, data):
-  if user_id not in USER_CACHE:
-    USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
-
-  USER_CACHE[user_id].update(data)
-
-  if FIREBASE_URL:
+def upload_photo_to_dify(file_id, user_id):
+    """تحميل الصورة من تليجرام ورفعها إلى Dify"""
     try:
-      requests.patch(f"{FIREBASE_URL}/users/{user_id}.json", json=data, timeout=3)
+        # 1. جلب مسار الصورة من تليجرام
+        res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}").json()
+        if not res.get("ok"):
+            return None
+        
+        file_path = res["result"]["file_path"]
+        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        
+        # 2. تنزيل بيانات الصورة
+        img_bytes = requests.get(download_url).content
+        
+        # 3. رفع الصورة إلى Dify API
+        upload_url = f"{DIFY_API_URL}/files/upload"
+        headers = {"Authorization": f"Bearer {DIFY_API_KEY}"}
+        files = {"file": ("chart.jpg", img_bytes, "image/jpeg")}
+        data = {"user": str(user_id)}
+        
+        up_res = requests.post(upload_url, headers=headers, files=files, data=data, timeout=30).json()
+        return up_res.get("id")
     except Exception as e:
-      print(f"Firebase update error: {e}")
+        print(f"خطأ في رفع الصورة إلى Dify: {e}")
+        return None
 
-
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
-  try:
-    user_id = str(message.from_user.id)
-    user_data = get_user_data(user_id)
-    trials = user_data.get("trials", 0)
-    expiry_date_str = user_data.get("expiry_date", "")
-
-    is_subscribed = False
-    if expiry_date_str:
-      try:
-        if datetime.now() < datetime.fromisoformat(expiry_date_str):
-          is_subscribed = True
-      except Exception:
-        pass
-
-    remaining_ar = "غير محدود (مشترك) ♾️" if is_subscribed else f"{max(0, 3 - trials)} من 3"
-    remaining_en = "Unlimited (Subscribed) ♾️" if is_subscribed else f"{max(0, 3 - trials)} of 3"
-
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    btn_ar = types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
-    btn_en = types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
-    markup.add(btn_ar, btn_en)
-
-    welcome_text = (
-        f"مرحباً بك في TradeGuard AI!\n"
-        f"Welcome to TradeGuard AI!\n\n"
-        f"📊 المحاولات المتبقية: {remaining_ar}\n"
-        f"📊 Remaining trials: {remaining_en}\n\n"
-        f"الرجاء اختيار لغتك المفضلة:\n"
-        f"Please select your preferred language:"
-    )
-
-    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
-  except Exception as e:
-    print(f"Error in start command: {e}")
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("lang_"))
-def set_language(call):
-  try:
-    user_id = str(call.from_user.id)
-    lang = call.data.split("_")[1]
-    update_user_data(user_id, {"lang": lang})
-
-    if lang == "ar":
-      text = "✅ تم اختيار اللغة العربية بنجاح.\nأرسل لي الآن صورة لأي شارت وسأقوم بتحليله فنياً لك."
-    else:
-      text = "✅ English language selected successfully.\nNow send me any chart image and I will analyze it for you."
-
-    bot.answer_callback_query(call.id)
-    bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id)
-  except Exception as e:
-    print(f"Error in callback language: {e}")
-
-
-@bot.message_handler(content_types=["photo"])
-def handle_photo(message):
-  # تم وضع المعالجة في Thread لتجنب انقطاع الاتصال (Timeout) مع تيليجرام
-  threading.Thread(target=process_chart_image, args=(message,)).start()
-
-
-def process_chart_image(message):
-  user_id = str(message.from_user.id)
-  user_data = get_user_data(user_id)
-
-  trials = user_data.get("trials", 0)
-  expiry_date_str = user_data.get("expiry_date", "")
-  lang = user_data.get("lang", "ar")
-
-  is_subscribed = False
-  if expiry_date_str:
-    try:
-      if datetime.now() < datetime.fromisoformat(expiry_date_str):
-        is_subscribed = True
-    except Exception:
-      pass
-
-  if not is_subscribed and trials >= 3:
-    if lang == "ar":
-      sub_msg = (
-          "⚠️ **انتهت محاولاتك المجانية الثلاث!**\n\nللاستمرار في تلقي تحليلات غير محدودة، اختر إحدى باقاتنا:\n"
-          "🥉 **باقة 10 أيام (15$)**\n🏆 **الباقة الشهرية (38$)**\n\n"
-          f"💳 **الدفع عبر TON:**\n`{WALLET_TON}`\n\nأرسل لقطة شاشة للتحويل هنا لتفعيل حسابك."
-      )
-    else:
-      sub_msg = (
-          "⚠️ **Your 3 free trials have ended!**\n\nTo continue receiving unlimited analysis, choose a plan:\n"
-          "🥉 **10-Day Plan ($15)**\n🏆 **Monthly Plan ($38)**\n\n"
-          f"💳 **Pay via TON:**\n`{WALLET_TON}`\n\nSend a screenshot of the transfer here to activate your account."
-      )
-    bot.reply_to(message, sub_msg, parse_mode="Markdown")
-    return
-
-  msg = bot.reply_to(message, "⏳ جاري تحميل الصورة..." if lang == "ar" else "⏳ Downloading image...")
-
-  try:
-    file_id = message.photo[-1].file_id
-    file_info_url = f"https://api.telegram.org/bot{TOKEN}/getFile?file_id={file_id}"
-    file_res = requests.get(file_info_url, timeout=10).json()
-
-    if not file_res.get("ok"):
-      raise Exception("Failed to fetch file info from Telegram")
-
-    file_path = file_res["result"]["file_path"]
-    download_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+def call_dify_api(user_id, prompt, upload_file_id=None):
+    """إرسال الطلب إلى Dify واستلام التحليل"""
+    headers = {
+        "Authorization": f"Bearer {DIFY_API_KEY}",
+        "Content-Type": "application/json"
+    }
     
-    img_res = requests.get(download_url, timeout=30)
-    downloaded_file = img_res.content
-
-    bot.edit_message_text(
-        chat_id=message.chat.id, message_id=msg.message_id,
-        text="⏳ جاري رفع الصورة إلى الخادم..." if lang == "ar" else "⏳ Uploading image..."
-    )
-
-    upload_url = "https://api.dify.ai/v1/files/upload"
-    headers_upload = {"Authorization": f"Bearer {DIFY_API_KEY}"}
-    files_data = {"file": ("chart.jpg", downloaded_file, "image/jpeg")}
-    data_upload = {"user": user_id}
-
-    upload_response = requests.post(upload_url, headers=headers_upload, files=files_data, data=data_upload, timeout=30)
-
-    if upload_response.status_code not in [200, 201]:
-      raise Exception(f"Upload failed [{upload_response.status_code}]: {upload_response.text}")
-
-    upload_result = upload_response.json()
-    dify_file_id = upload_result.get("id")
-
-    bot.edit_message_text(
-        chat_id=message.chat.id, message_id=msg.message_id,
-        text="⏳ جاري تحليل الشارت فنياً..." if lang == "ar" else "⏳ Analyzing chart technically..."
-    )
-
-    chat_url = "https://api.dify.ai/v1/chat-messages"
+    conv_id = user_conversations.get(user_id, "")
     
-    if lang == "ar":
-      query_text = "قم بتحليل هذا الشارت تحليلاً فنياً مفصلاً باللغة العربية حصراً."
-    else:
-      query_text = (
-          "CRITICAL INSTRUCTION: Respond strictly and entirely in ENGLISH. Do NOT use any Arabic words.\n"
-          "Analyze this chart in detail including: Trend, Key Support & Resistance, Entry, Take Profit, and Stop Loss."
-      )
+    files = []
+    if upload_file_id:
+        files.append({
+            "type": "image",
+            "transfer_method": "local_file",
+            "upload_file_id": upload_file_id
+        })
 
     payload = {
         "inputs": {},
-        "query": query_text,
+        "query": prompt if prompt else "قم بتحليل هذا الشارت المرفق وتحديد الاتجاه والدعوم والمقاومات وفرص التداول.",
         "response_mode": "blocking",
-        "user": user_id,
-        "files": [{"type": "image", "transfer_method": "local_file", "upload_file_id": dify_file_id}]
+        "user": str(user_id),
+        "conversation_id": conv_id,
+        "files": files
     }
+
+    try:
+        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=60)
+        if res.status_code == 200:
+            data = res.json()
+            user_conversations[user_id] = data.get("conversation_id", "")
+            return data.get("answer", "لم يتم استلام رد من النموذج.")
+        else:
+            print(f"Dify Error {res.status_code}: {res.text}")
+            return "حدث خطأ أثناء الاتصال بسيرفر الذكاء الاصطناعي."
+    except Exception as e:
+        print(f"Exception during Dify API call: {e}")
+        return "تأخر الرد من السيرفر، يرجى المحاولة مرة أخرى."
+
+@app.route('/', methods=['GET', 'POST'])
+def webhook():
+    if request.method == 'GET':
+        return "TradeGuard AI Bot is Running Live!", 200
+
+    update = request.get_json(force=True, silent=True)
+    if not update or "message" not in update:
+        return jsonify({"status": "ignored"}), 200
+
+    msg = update["message"]
+    chat_id = msg["chat"]["id"]
+    user_id = msg["from"]["id"]
     
-    headers_chat = {"Authorization": f"Bearer {DIFY_API_KEY}", "Content-Type": "application/json"}
-    
-    # تمت زيادة وقت الانتظار هنا لضمان عدم حدوث خطأ إذا تأخر Dify في الرد
-    response = requests.post(chat_url, headers=headers_chat, json=payload, timeout=120)
+    text = msg.get("text", "")
+    photos = msg.get("photo", None)
+    caption = msg.get("caption", "")
 
-    if response.status_code != 200:
-      raise Exception(f"Chat API failed [{response.status_code}]: {response.text}")
+    # الرد على أمر /start
+    if text == "/start":
+        welcome = "أهلاً بك في **TradeGuard AI** 📈\nأنا مساعدك الذكي لتحليل الأسواق المالية والشارتات.\n\nأرسل لي أي استفسار أو صورة للشارت وسأقوم بتحليله فوراً!"
+        send_telegram_message(chat_id, welcome)
+        return jsonify({"status": "ok"}), 200
 
-    result = response.json()
-    answer = result.get("answer", "عذراً، لم يتمكن النظام من قراءة التحليل." if lang == "ar" else "Sorry, the system couldn't read the analysis.")
-    bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=answer)
+    send_telegram_action(chat_id, "typing")
 
-    # خصم المحاولة
-    if not is_subscribed:
-      new_trials = trials + 1
-      update_user_data(user_id, {"trials": new_trials})
-      remaining = max(0, 3 - new_trials)
-      rem_msg = f"ℹ️ لديك {remaining} محاولات مجانية متبقية." if lang == "ar" else f"ℹ️ You have {remaining} free trials remaining."
-      bot.send_message(message.chat.id, rem_msg)
+    upload_file_id = None
+    if photos:
+        # اختيار الصورة بأعلى دقة
+        file_id = photos[-1]["file_id"]
+        upload_file_id = upload_photo_to_dify(file_id, user_id)
+        prompt = caption if caption else "قم بتحليل الشارت المرفق في الصورة."
+    else:
+        prompt = text
 
-  except Exception as e:
-    bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Error: {str(e)}")
+    if not prompt and not upload_file_id:
+        return jsonify({"status": "ok"}), 200
 
+    # جلب التحليل من Dify وإرساله للمستخدم
+    reply = call_dify_api(user_id, prompt, upload_file_id)
+    send_telegram_message(chat_id, reply)
 
-# تفعيل الـ Webhook فور تشغيل التطبيق
-def setup_webhook():
-  try:
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{RENDER_APP_URL}/{TOKEN}")
-    print(f"Webhook set successfully to {RENDER_APP_URL}")
-  except Exception as e:
-    print(f"Failed to set Webhook: {e}")
+    return jsonify({"status": "ok"}), 200
 
-setup_webhook()
-
-if __name__ == "__main__":
-  app.run(host="0.0.0.0", port=PORT)
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
