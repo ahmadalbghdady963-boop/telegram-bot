@@ -5,23 +5,23 @@ from flask import Flask, request, abort
 import requests
 from telebot import TeleBot, types
 
-# === المتغيرات الأساسية (تُجلب من إعدادات ريندر) ===
+# === المتغيرات الأساسية ===
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 DIFY_API_KEY = os.getenv("DIFY_API_KEY")
-FIREBASE_URL = os.getenv("FIREBASE_URL") # تأكد في ريندر أن الرابط يبدأ بـ https:// وينتهي بـ .com بدون شرطات مائلة إضافية
+FIREBASE_URL = os.getenv("FIREBASE_URL")
 PORT = int(os.getenv("PORT", 10000))
 
-# === إعدادات البوت الخاصة بك ===
+# === إعدادات الإدارة والتطبيق ===
 ADMIN_ID = "8655689754"
+ADMIN_USERNAME = "@TradeGuard_Admin"
 RENDER_APP_URL = "https://telegram-bot-pqy3.onrender.com"
 WALLET_TON = "UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK"
-ADMIN_USERNAME = "@TradeGuard_Admin"
 
 bot = TeleBot(TOKEN)
 app = Flask(__name__)
 USER_CACHE = {}
 
-# === مسارات الويب هوك (Webhook) ===
+# === مسارات الويب هوك ===
 @app.route("/")
 def home():
   return "TradeGuard AI Bot is active and running!"
@@ -40,7 +40,7 @@ def webhook():
   else:
     abort(403)
 
-# === دوال قواعد البيانات (Firebase) ===
+# === قواعد البيانات ===
 def get_user_data(user_id):
   if user_id not in USER_CACHE:
     USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
@@ -67,7 +67,7 @@ def update_user_data(user_id, data):
     except Exception as e:
       print(f"Firebase update error: {e}")
 
-# === أوامر الإدارة ===
+# === أمر التفعيل الخاص بك (للإدارة فقط) ===
 @bot.message_handler(commands=['activate'])
 def activate_user(message):
   if str(message.from_user.id) != ADMIN_ID:
@@ -87,10 +87,14 @@ def activate_user(message):
   except Exception as e:
     bot.reply_to(message, "❌ **خطأ في الصيغة.**\nالاستخدام الصحيح:\n`/activate <آيدي_المشترك> <عدد_الأيام>`\nمثال: `/activate 123456789 30`", parse_mode="Markdown")
 
-# === أوامر المستخدمين والتصميم الأصلي ===
+# === واجهة المستخدم والأزرار الشفافة ===
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
   try:
+    # هذا السطر يحذف الأزرار السفلية القديمة التي وضعها صديقك
+    dummy = bot.send_message(message.chat.id, "🔄...", reply_markup=types.ReplyKeyboardRemove())
+    bot.delete_message(message.chat.id, dummy.message_id)
+
     user_id = str(message.from_user.id)
     user_data = get_user_data(user_id)
     trials = user_data.get("trials", 0)
@@ -107,7 +111,7 @@ def send_welcome(message):
     remaining_ar = "غير محدود (مشترك) ♾️" if is_subscribed else f"{max(0, 3 - trials)} من 3"
     remaining_en = "Unlimited (Subscribed) ♾️" if is_subscribed else f"{max(0, 3 - trials)} of 3"
 
-    # إعادة الأزرار الشفافة الأنيقة
+    # الأزرار الشفافة الأصلية
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_ar = types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
     btn_en = types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
@@ -143,7 +147,7 @@ def set_language(call):
   except Exception as e:
     print(f"Error in callback: {e}")
 
-# === معالجة الصور والتواصل السليم مع Dify ===
+# === معالجة الصور والذكاء الاصطناعي ===
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
   threading.Thread(target=process_chart_image, args=(message,)).start()
@@ -164,25 +168,37 @@ def process_chart_image(message):
     except Exception:
       pass
 
-  # رسالة الدفع إذا انتهت المحاولات
+  # رسالة الاشتراك مفصلة بالأسعار الجديدة
   if not is_subscribed and trials >= 3:
     if lang == "ar":
       sub_msg = (
-          "⚠️ **انتهت محاولاتك المجانية!**\n\nللاشتراك والحصول على تحليلات غير محدودة:\n"
-          "🥉 **باقة 10 أيام (15$)**\n🏆 **الباقة الشهرية (38$)**\n\n"
-          f"💳 **الدفع عبر شبكة TON:**\n`{WALLET_TON}`\n\n"
-          "✅ **للتفعيل:**\n"
-          f"قم بنسخ هذا الرقم (الآيدي الخاص بك): `{user_id}`\n"
-          f"وأرسله مع صورة إيصال الدفع إلى الإدارة هنا: {ADMIN_USERNAME}"
+          "⚠️ **انتهت محاولاتك المجانية!**\n\n"
+          "للاشتراك والحصول على تحليلات غير محدودة دقيقة، اختر إحدى الباقات:\n\n"
+          "🥉 **باقة 10 أيام (15$)**\n"
+          "🏆 **باقة 30 يوم (40$)**\n\n"
+          "💳 **خطوات الاشتراك:**\n"
+          "1️⃣ قم بتحويل المبلغ عبر شبكة TON إلى المحفظة التالية:\n"
+          f"`{WALLET_TON}`\n"
+          "*(اضغط على عنوان المحفظة لنسخه)*\n\n"
+          "2️⃣ انسخ الرقم التعريفي الخاص بك (ID):\n"
+          f"`{user_id}`\n\n"
+          "3️⃣ أرسل صورة إيصال الدفع مع الرقم التعريفي للإدارة لتفعيل حسابك فوراً:\n"
+          f"👉 {ADMIN_USERNAME}"
       )
     else:
       sub_msg = (
-          "⚠️ **Your free trials have ended!**\n\nTo subscribe for unlimited analysis:\n"
-          "🥉 **10-Day Plan ($15)**\n🏆 **Monthly Plan ($38)**\n\n"
-          f"💳 **Pay via TON network:**\n`{WALLET_TON}`\n\n"
-          "✅ **To Activate:**\n"
-          f"Copy this ID: `{user_id}`\n"
-          f"And send it with the payment receipt to the admin here: {ADMIN_USERNAME}"
+          "⚠️ **Your free trials have ended!**\n\n"
+          "To subscribe for unlimited analysis, choose a plan:\n\n"
+          "🥉 **10-Day Plan ($15)**\n"
+          "🏆 **30-Day Plan ($40)**\n\n"
+          "💳 **How to subscribe:**\n"
+          "1️⃣ Transfer the amount via TON network to this wallet:\n"
+          f"`{WALLET_TON}`\n"
+          "*(Tap the wallet address to copy)*\n\n"
+          "2️⃣ Copy your ID:\n"
+          f"`{user_id}`\n\n"
+          "3️⃣ Send the payment receipt and your ID to the admin to activate your account:\n"
+          f"👉 {ADMIN_USERNAME}"
       )
     bot.reply_to(message, sub_msg, parse_mode="Markdown")
     return
@@ -190,13 +206,12 @@ def process_chart_image(message):
   msg = bot.reply_to(message, "⏳ جاري فحص وتحليل الصورة..." if lang == "ar" else "⏳ Inspecting and analyzing image...")
 
   try:
-    # 1. تحميل الصورة من تيليجرام
     file_id = message.photo[-1].file_id
     file_info_url = f"https://api.telegram.org/bot{TOKEN}/getFile?file_id={file_id}"
     file_res = requests.get(file_info_url, timeout=10).json()
 
     if not file_res.get("ok"):
-      raise Exception("Failed to fetch file info from Telegram")
+      raise Exception("Failed to fetch file info")
 
     file_path = file_res["result"]["file_path"]
     download_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
@@ -204,7 +219,6 @@ def process_chart_image(message):
     img_res = requests.get(download_url, timeout=30)
     downloaded_file = img_res.content
 
-    # 2. رفع الصورة إلى Dify
     upload_url = "https://api.dify.ai/v1/files/upload"
     headers_upload = {"Authorization": f"Bearer {DIFY_API_KEY}"}
     files_data = {"file": ("chart.jpg", downloaded_file, "image/jpeg")}
@@ -213,26 +227,25 @@ def process_chart_image(message):
     upload_response = requests.post(upload_url, headers=headers_upload, files=files_data, data=data_upload, timeout=30)
     
     if upload_response.status_code not in [200, 201]:
-      raise Exception(f"Dify Upload Error: {upload_response.text}")
+      raise Exception("Upload failed")
 
     upload_result = upload_response.json()
     dify_file_id = upload_result.get("id")
 
-    # 3. إرسال الطلب للتحليل (الفحص الذكي)
     chat_url = "https://api.dify.ai/v1/chat-messages"
     
-    query_text = (
-        "قم بفحص هذه الصورة بدقة. إذا كانت الصورة لا تحتوي على شارت تداول، أو رسوم بيانية مالية، أو منصة تداول (مثل صورة شخصية، إيصال دفع، لقطة شاشة عادية، أو أي شيء آخر)، "
-        "فلا تقم بتحليلها واكتب بالحرف الواحد فقط هذه الجملة: 'NOT_CHART'.\n"
-        "أما إذا كانت شارت تداول صحيح، فقم بتحليلها فنياً بشكل مفصل ومقسم فقرات، وفي النهاية أضف تحذير المخاطرة بأن التداول مسؤولية شخصية."
-    )
-
-    if lang == "en":
-       query_text = (
-        "Inspect this image carefully. If the image DOES NOT contain a trading chart, financial graph, or trading platform (e.g., a selfie, payment receipt, normal screenshot), "
-        "do NOT analyze it and output exactly this phrase: 'NOT_CHART'.\n"
-        "If it is a valid trading chart, provide a detailed technical analysis in ENGLISH ONLY, and append a risk warning at the end."
-    )
+    # الفحص الذكي للصور
+    if lang == "ar":
+        query_text = (
+            "قم بفحص هذه الصورة بدقة. إذا كانت الصورة لا تحتوي على شارت تداول، أو رسوم بيانية مالية، أو منصة تداول (مثل صورة شخصية، إيصال دفع، لقطة شاشة عادية)، "
+            "فلا تقم بتحليلها واكتب بالحرف الواحد فقط: 'NOT_CHART'.\n"
+            "أما إذا كانت شارت تداول، فقم بتحليلها فنياً بشكل مفصل، وفي النهاية أضف تحذير أن التداول مسؤولية شخصية."
+        )
+    else:
+        query_text = (
+            "Inspect this image. If it DOES NOT contain a trading chart (e.g., selfie, receipt), output exactly: 'NOT_CHART'.\n"
+            "If it is a valid chart, analyze it technically in ENGLISH ONLY, and add a risk warning."
+        )
 
     payload = {
         "inputs": {},
@@ -246,29 +259,28 @@ def process_chart_image(message):
     response = requests.post(chat_url, headers=headers_chat, json=payload, timeout=120)
 
     if response.status_code != 200:
-      raise Exception(f"Dify Chat Error: {response.status_code}")
+      raise Exception("API Error")
 
     result = response.json()
-    answer = result.get("answer", "")
+    answer = result.get("answer", "Error.")
 
-    # 4. التعامل مع الرد
+    # رفض الصور العشوائية
     if "NOT_CHART" in answer:
       warning_text = (
-          "⚠️ **هذه ليست صورة شارت تداول!**\n"
-          "الرجاء إرسال رسوم بيانية أو شارت تداول صحيح للتحليل.\n\n"
-          f"💡 *ملاحظة:* إذا كنت تريد إرسال إيصال الدفع، فالرجاء إرساله مباشرة إلى الإدارة هنا: {ADMIN_USERNAME}"
+          "⚠️ **عذراً، هذه ليست صورة شارت تداول!**\n"
+          "الرجاء إرسال رسوم بيانية صحيحة للتحليل.\n\n"
+          f"💡 *ملاحظة:* إذا كنت ترسل إيصال الدفع، أرسله مباشرة للإدارة: {ADMIN_USERNAME}"
       ) if lang == "ar" else (
-          "⚠️ **This is not a trading chart!**\n"
-          "Please send a valid trading chart or graph for analysis.\n\n"
-          f"💡 *Note:* If you are sending a payment receipt, please send it directly to the admin here: {ADMIN_USERNAME}"
+          "⚠️ **Sorry, this is not a trading chart!**\n"
+          "Please send a valid chart.\n\n"
+          f"💡 *Note:* Send payment receipts directly to: {ADMIN_USERNAME}"
       )
       bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=warning_text, parse_mode="Markdown")
       return
 
-    # إرسال التحليل النهائي
     bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=answer)
 
-    # خصم محاولة فقط لو كانت الصورة شارت حقيقي وتم تحليلها بنجاح
+    # خصم محاولة فقط عند النجاح
     if not is_subscribed:
       new_trials = trials + 1
       update_user_data(user_id, {"trials": new_trials})
@@ -277,8 +289,7 @@ def process_chart_image(message):
       bot.send_message(message.chat.id, rem_msg)
 
   except Exception as e:
-    error_msg = f"❌ حدث خطأ في النظام. الرجاء المحاولة لاحقاً.\n(Debug: {str(e)})" if lang == "ar" else f"❌ System error. Please try again later.\n(Debug: {str(e)})"
-    bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=error_msg)
+    bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text="❌ عذراً، حدث خطأ في النظام. يرجى المحاولة لاحقاً.")
 
 # === إعداد الويب هوك ===
 def setup_webhook():
@@ -286,7 +297,7 @@ def setup_webhook():
     bot.remove_webhook()
     bot.set_webhook(url=f"{RENDER_APP_URL}/{TOKEN}")
   except Exception as e:
-    print(f"Failed to set Webhook: {e}")
+    pass
 
 setup_webhook()
 
