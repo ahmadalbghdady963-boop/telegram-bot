@@ -8,7 +8,6 @@ from telebot import TeleBot, types
 
 # === المتغيرات الأساسية ===
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-# المفتاح الجديد الخاص بك موجود هنا
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KHWBDC3-_lWFknh-Pil_YIYl4ofaz7CB99wngLkS8jwQ"
 FIREBASE_URL = os.getenv("FIREBASE_URL")
 PORT = int(os.getenv("PORT", 10000))
@@ -176,12 +175,9 @@ def process_chart_image(message):
         downloaded_file = bot.download_file(file_info.file_path)
         base64_image = base64.b64encode(downloaded_file).decode('utf-8')
 
-        # هنا تم تصحيح طريقة تمرير المفتاح
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY
-        }
-        gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+        # إرسال المفتاح عبر الـ URL مباشرة كما تتطلبه المنصة
+        headers = {"Content-Type": "application/json"}
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
         prompt_text = (
             "أنت خبير تداول وحسابات مالية. قم بتحليل هذا الشارت المالي بدقة (الاتجاه، الدعوم والمقاومات، التوصية)، "
