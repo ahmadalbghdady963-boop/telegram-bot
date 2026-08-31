@@ -1,5 +1,6 @@
 import os
 import requests
+import threading
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -19,7 +20,7 @@ def save_to_firebase(path, data):
         url = f"{FIREBASE_URL}/{path}.json"
         requests.patch(url, json=data, timeout=5)
     except Exception as e:
-        print(f"خطأ Firebase: {e}")
+        print(f"Firebase Error: {e}")
 
 def send_telegram_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -31,21 +32,24 @@ def send_telegram_message(chat_id, text):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"خطأ إرسال تليجرام: {e}")
+        print(f"Telegram Send Error: {e}")
 
 def send_telegram_action(chat_id, action="typing"):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
-    requests.post(url, json={"chat_id": chat_id, "action": action})
+    try:
+        requests.post(url, json={"chat_id": chat_id, "action": action}, timeout=5)
+    except Exception:
+        pass
 
 def upload_photo_to_dify(file_id, user_id):
     try:
-        res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}").json()
+        res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}", timeout=10).json()
         if not res.get("ok"):
             return None
         
         file_path = res["result"]["file_path"]
         download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        img_bytes = requests.get(download_url).content
+        img_bytes = requests.get(download_url, timeout=20).content
         
         upload_url = f"{DIFY_API_URL}/files/upload"
         headers = {"Authorization": f"Bearer {DIFY_API_KEY}"}
@@ -55,7 +59,7 @@ def upload_photo_to_dify(file_id, user_id):
         up_res = requests.post(upload_url, headers=headers, files=files, data=data, timeout=30).json()
         return up_res.get("id")
     except Exception as e:
-        print(f"خطأ رفع الصورة: {e}")
+        print(f"Upload Photo Error: {e}")
         return None
 
 def call_dify_api(user_id, prompt, upload_file_id=None):
@@ -75,7 +79,7 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
 
     payload = {
         "inputs": {},
-        "query": prompt if prompt else "قم بتحليل الشارت المرفق وتحديد الاتجاه والدعوم والمقاومات.",
+        "query": prompt if prompt else "قم بتحليل الشارت المرفق وتحديد الاتجاه والدعوم والمقاومات وفرص التداول.",
         "response_mode": "blocking",
         "user": str(user_id),
         "conversation_id": conv_id,
@@ -83,7 +87,7 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
     }
 
     try:
-        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=60)
+        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=120)
         if res.status_code == 200:
             data = res.json()
             new_conv_id = data.get("conversation_id", "")
@@ -102,10 +106,27 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
             print(f"Dify Error {res.status_code}: {res.text}")
             return "حدث خطأ أثناء الاتصال بمحرك الذكاء الاصطناعي."
     except Exception as e:
-        print(f"Exception call: {e}")
+        print(f"Dify Exception: {e}")
         return "تأخر الرد من السيرفر، يرجى المحاولة مرة أخرى."
 
-# قبول الطلبات على جميع المسارات الممكنة لمنع خطأ 404
+def process_message_async(chat_id, user_id, text, photos, caption):
+    """معالجة الرسالة في الخلفية لتجنب خطأ WORKER TIMEOUT"""
+    send_telegram_action(chat_id, "typing")
+    
+    upload_file_id = None
+    if photos:
+        file_id = photos[-1]["file_id"]
+        upload_file_id = upload_photo_to_dify(file_id, user_id)
+        prompt = caption if caption else "قم بتحليل الشارت المرفق في الصورة."
+    else:
+        prompt = text
+
+    if not prompt and not upload_file_id:
+        return
+
+    reply = call_dify_api(user_id, prompt, upload_file_id)
+    send_telegram_message(chat_id, reply)
+
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
 @app.route('/<path:path>', methods=['GET', 'POST'])
 def webhook(path):
@@ -137,21 +158,8 @@ def webhook(path):
         send_telegram_message(chat_id, welcome)
         return jsonify({"status": "ok"}), 200
 
-    send_telegram_action(chat_id, "typing")
-
-    upload_file_id = None
-    if photos:
-        file_id = photos[-1]["file_id"]
-        upload_file_id = upload_photo_to_dify(file_id, user_id)
-        prompt = caption if caption else "قم بتحليل الشارت المرفق في الصورة."
-    else:
-        prompt = text
-
-    if not prompt and not upload_file_id:
-        return jsonify({"status": "ok"}), 200
-
-    reply = call_dify_api(user_id, prompt, upload_file_id)
-    send_telegram_message(chat_id, reply)
+    # بدء المعالجة في مسار منفصل (Thread) والرد على تليجرام فوراً
+    threading.Thread(target=process_message_async, args=(chat_id, user_id, text, photos, caption)).start()
 
     return jsonify({"status": "ok"}), 200
 
