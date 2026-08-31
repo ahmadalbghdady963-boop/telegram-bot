@@ -14,17 +14,11 @@ DIFY_API_KEY = os.getenv("DIFY_API_KEY") or os.getenv("GEMINI_API_KEY")
 DIFY_API_URL = os.getenv("DIFY_API_URL", "https://api.dify.ai/v1").rstrip('/')
 FIREBASE_URL = os.getenv("FIREBASE_DB_URL", "").rstrip('/')
 
-user_conversations = {}
-
 def clean_text_for_telegram(text):
-    """دالة لتنظيف النص من رموز ### و --- التي تشوه محاذاة النص العربي في تليجرام"""
     if not text:
         return ""
-    # إزالة رموز العناوين ###
     text = re.sub(r'#{1,6}\s*', '', text)
-    # إزالة الخطوط الفاصلة ---
     text = re.sub(r'^\s*[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
-    # تنظيف الأسطر الفارغة المكررة
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -38,10 +32,7 @@ def save_to_firebase(path, data):
         log(f"Firebase Error: {e}")
 
 def send_telegram_message(chat_id, text):
-    """إرسال الرسالة مع التنظيف وإعادة المحاولة التلقائية"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
-    # تنظيف النص قبل إرساله
     clean_text = clean_text_for_telegram(text)
     
     payload = {
@@ -51,15 +42,9 @@ def send_telegram_message(chat_id, text):
     }
     try:
         r = requests.post(url, json=payload, timeout=10)
-        log(f"Telegram response status: {r.status_code}")
-        
-        # إذا فشل التنسيق (400)، نرسل النص كـ Plain Text نقي تماماً
         if r.status_code != 200:
-            log(f"Markdown failed ({r.status_code}). Retrying plain text...")
             payload.pop("parse_mode", None)
-            r_retry = requests.post(url, json=payload, timeout=10)
-            log(f"Retry status code: {r_retry.status_code}")
-            
+            requests.post(url, json=payload, timeout=10)
     except Exception as e:
         log(f"Telegram Send Error: {e}")
 
@@ -90,36 +75,20 @@ def upload_photo_to_dify(file_id, user_id):
         if up_res.status_code in [200, 201]:
             return up_res.json().get("id"), None
         else:
-            return None, f"❌ فشل رفع الصورة إلى Dify [{up_res.status_code}]"
+            try:
+                err_details = up_res.json().get("message", up_res.text)
+            except:
+                err_details = up_res.text
+            return None, f"❌ فشل رفع الصورة إلى Dify [{up_res.status_code}]:\n{err_details}"
             
     except Exception as e:
         return None, f"❌ خطأ أثناء رفع الصورة: {str(e)}"
 
 def call_dify_api(user_id, prompt, upload_file_id=None):
-    headers = {"Authorization": f"Bearer {DIFY_API_KEY}", "Content-Type": "application/json"}
-    files = [{"type": "image", "transfer_method": "local_file", "upload_file_id": upload_file_id}] if upload_file_id else []
-
-    payload = {
-        "inputs": {},
-        "query": prompt if prompt else "حلل هذا الشارت فنياً.",
-        "response_mode": "blocking",
-        "user": str(user_id),
-        "files": files
+    headers = {
+        "Authorization": f"Bearer {DIFY_API_KEY}",
+        "Content-Type": "application/json"
     }
-
-    try:
-        # رفع مهلة الانتظار إلى 300 ثانية لمنع خطأ 504
-        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=300)
-        if res.status_code == 200:
-            return res.json().get("answer", "لم يتم استلام رد.")
-        elif res.status_code == 504:
-            return "⚠️ عذراً، استغرق الذكاء الاصطناعي وقتاً طويلاً جداً في معالجة الصورة. يرجى إرسال صورة أصغر حجماً أو إعادة المحاولة."
-        return f"❌ خطأ من الذكاء الاصطناعي [{res.status_code}]"
-    except requests.exceptions.Timeout:
-        return "⚠️ انتهت مهلة الانتظار (Timeout). الخادم بطيء في الاستجابة حالياً، يرجى المحاولة لاحقاً."
-    except Exception as e:
-        return f"❌ خطأ بالاتصال: {str(e)}"
-
     
     files = []
     if upload_file_id:
@@ -129,23 +98,41 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
             "upload_file_id": upload_file_id
         })
 
+    # دمج التوجيه لحل مشكلة التمييز بين الصور والشارتات
+    system_prompt = (
+        "أنت خبير أسواق مالية. "
+        "مهمتك الأولى: افحص الصورة بدقة. إذا لم تكن الصورة تمثل رسماً بيانياً (شارت) لأسهم أو عملات، "
+        "توقف فوراً ورد بالنص التالي فقط: '❌ عذراً، هذه ليست صورة لشارت مالي. يرجى إرسال شارت صحيح.' "
+        "مهمتك الثانية: إذا تأكدت أنها شارت، قم بتحليلها بدقة واستخراج الاتجاه العام، وأهم مناطق الدعم والمقاومة."
+    )
+    
+    final_query = prompt if prompt else system_prompt
+
     payload = {
         "inputs": {},
-        "query": prompt if prompt else "قم بتحليل الشارت المرفق واستخراج الاتجاه والدعوم والمقاومات.",
+        "query": final_query,
         "response_mode": "blocking",
         "user": str(user_id),
         "files": files
     }
 
     try:
-        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=240)
+        # تقليل وقت الـ Timeout قليلاً لتجنب تعليق البوت للأساس
+        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=120)
         
         if res.status_code == 200:
             data = res.json()
-            answer = data.get("answer", "لم يتم استلام رد من النموذج.")
-            return answer
+            return data.get("answer", "لم يتم استلام رد من النموذج.")
         else:
-            return f"❌ خطأ من الذكاء الاصطناعي [{res.status_code}]"
+            # سحب تفاصيل الخطأ (خاصة 400) لمعرفة المشكلة من Dify
+            try:
+                error_details = res.json().get("message", res.text)
+            except:
+                error_details = res.text
+            return f"❌ خطأ من الذكاء الاصطناعي [{res.status_code}]:\n{error_details}\n\n*تأكد من تفعيل (Vision) واختيار نموذج يدعم الصور في Dify.*"
+            
+    except requests.exceptions.ReadTimeout:
+        return "❌ خطأ (Timeout 504): استغرق النموذج وقتاً طويلاً جداً في تحليل الصورة. حاول مجدداً أو استخدم نموذجاً أسرع."
     except Exception as e:
         return f"❌ حدث خطأ عند الاتصال بـ Dify: {str(e)}"
 
@@ -160,6 +147,8 @@ def process_message_async(chat_id, user_id, text, photos, caption, first_name, u
         })
 
         upload_file_id = None
+        prompt = ""
+        
         if photos:
             send_telegram_message(chat_id, "⏳ جاري استلام الشارت وتحليله، قد يستغرق الأمر بضع ثوانٍ...")
             file_id = photos[-1]["file_id"]
@@ -167,7 +156,7 @@ def process_message_async(chat_id, user_id, text, photos, caption, first_name, u
             if err_msg:
                 send_telegram_message(chat_id, err_msg)
                 return
-            prompt = caption if caption else "قم بتحليل الشارت المرفق."
+            prompt = caption if caption else ""
         else:
             prompt = text
 
@@ -177,7 +166,7 @@ def process_message_async(chat_id, user_id, text, photos, caption, first_name, u
         reply = call_dify_api(user_id, prompt, upload_file_id)
         send_telegram_message(chat_id, reply)
     except Exception as main_e:
-        send_telegram_message(chat_id, f"❌ حدث خطأ: {str(main_e)}")
+        send_telegram_message(chat_id, f"❌ حدث خطأ غير متوقع: {str(main_e)}")
 
 @app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
 @app.route('/<path:path>', methods=['GET', 'POST'])
