@@ -1,4 +1,5 @@
 import os
+import base64
 import threading
 from datetime import datetime, timedelta
 import requests
@@ -7,7 +8,7 @@ from telebot import TeleBot, types
 
 # === المتغيرات الأساسية ===
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-DIFY_API_KEY = os.getenv("DIFY_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KPYmR1he14JgJmBsnxEChrJ-2Y0sXI635OWSB2s1pxMQ"
 FIREBASE_URL = os.getenv("FIREBASE_URL")
 PORT = int(os.getenv("PORT", 10000))
 
@@ -24,7 +25,7 @@ USER_CACHE = {}
 # === مسارات الويب هوك ===
 @app.route("/")
 def home():
-    return "Bot is running!"
+    return "Bot is running directly on Google Gemini!"
 
 @app.route("/health")
 def health():
@@ -43,7 +44,7 @@ def webhook():
     else:
         abort(403)
 
-# === قواعد البيانات بطريقة آمنة لا توقف البوت ===
+# === قواعد البيانات آمنة ===
 def get_user_data(user_id):
     if user_id not in USER_CACHE:
         USER_CACHE[user_id] = {"trials": 0, "expiry_date": "", "lang": "ar"}
@@ -54,7 +55,7 @@ def get_user_data(user_id):
             if res.status_code == 200 and res.json():
                 USER_CACHE[user_id].update(res.json())
         except:
-            pass # تجاهل أخطاء فايربيس كي لا يتوقف البوت
+            pass
     return USER_CACHE[user_id]
 
 def update_user_data(user_id, data):
@@ -84,7 +85,7 @@ def activate_user(message):
     except:
         bot.reply_to(message, "❌ خطأ. الاستخدام الصحيح: `/activate 123456789 30`", parse_mode="Markdown")
 
-# === أمر البداية (وهنا نمسح الأزرار القديمة بقوة) ===
+# === أمر البداية مع مسح الأزرار القديمة ===
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     try:
@@ -103,7 +104,6 @@ def send_welcome(message):
 
         remaining_ar = "غير محدود ♾️" if is_subscribed else f"{max(0, 3 - trials)} من 3"
         
-        # إنشاء الأزرار الشفافة
         markup = types.InlineKeyboardMarkup(row_width=2)
         btn_ar = types.InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")
         btn_en = types.InlineKeyboardButton("🇬🇧 English", callback_data="lang_en")
@@ -113,11 +113,9 @@ def send_welcome(message):
                 f"📊 المحاولات المتبقية: {remaining_ar}\n\n"
                 f"الرجاء اختيار اللغة / Select Language:")
         
-        # إرسال الرسالة مع الأزرار الشفافة ومسح الأزرار السفلية في نفس الوقت!
         bot.send_message(message.chat.id, text, reply_markup=markup)
         
-        # رسالة وهمية إضافية للتأكد من مسح الأزرار السفلية، ثم حذفها فوراً
-        dummy = bot.send_message(message.chat.id, "جاري التحديث...", reply_markup=types.ReplyKeyboardRemove())
+        dummy = bot.send_message(message.chat.id, "جاري تحديث القائمة...", reply_markup=types.ReplyKeyboardRemove())
         bot.delete_message(message.chat.id, dummy.message_id)
 
     except Exception as e:
@@ -133,7 +131,7 @@ def set_language(call):
     bot.answer_callback_query(call.id)
     bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id)
 
-# === معالجة الصور (مع كشف الأخطاء الحقيقية) ===
+# === معالجة الصور عبر Google Gemini المباشر ===
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     threading.Thread(target=process_chart_image, args=(message,)).start()
@@ -169,53 +167,54 @@ def process_chart_image(message):
         bot.reply_to(message, sub_msg, parse_mode="Markdown")
         return
 
-    msg = bot.reply_to(message, "⏳ جاري التحليل...")
+    msg = bot.reply_to(message, "⏳ جاري التحليل بواسطة Gemini...")
 
     try:
         file_id = message.photo[-1].file_id
         file_info = bot.get_file(file_id)
         downloaded_file = bot.download_file(file_info.file_path)
+        base64_image = base64.b64encode(downloaded_file).decode('utf-8')
 
-        upload_url = "https://api.dify.ai/v1/files/upload"
-        headers_upload = {"Authorization": f"Bearer {DIFY_API_KEY}"}
-        files_data = {"file": ("chart.jpg", downloaded_file, "image/jpeg")}
-        data_upload = {"user": user_id}
-
-        upload_response = requests.post(upload_url, headers=headers_upload, files=files_data, data=data_upload, timeout=30)
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
         
-        if upload_response.status_code not in [200, 201]:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ فشل رفع الصورة لـ Dify:\nCode: {upload_response.status_code}\n{upload_response.text}")
-            return
+        prompt_text = (
+            "أنت خبير تداول وحسابات مالية. قم بتحليل هذا الشارت المالي بدقة (الاتجاه، الدعوم والمقاومات، التوصية)، "
+            "ملاحظة مهمة جداً: تنبيه إدارة المخاطر بدقة 85% والمخاطرة 1% إلى 2% هي مسؤوليته. "
+            "إذا لم تكن الصورة شارت تداول إطلاقاً، اكتب كلمة NOT_CHART فقط."
+        ) if lang == "ar" else (
+            "Analyze this financial chart technically (Trend, Support/Resistance, Recommendation). "
+            "If the image is not a trading chart at all, write only NOT_CHART."
+        )
 
-        upload_result = upload_response.json()
-        dify_file_id = upload_result.get("id")
-
-        chat_url = "https://api.dify.ai/v1/chat-messages"
-        query_text = "قم بتحليل هذا الشارت فنياً، وإذا لم تكن الصورة شارت اكتب فقط NOT_CHART" if lang == "ar" else "Analyze this chart technically. If not a chart, output NOT_CHART."
-        
         payload = {
-            "inputs": {},
-            "query": query_text,
-            "response_mode": "blocking",
-            "user": user_id,
-            "files": [{"type": "image", "transfer_method": "local_file", "upload_file_id": dify_file_id}]
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt_text},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": base64_image
+                            }
+                        }
+                    ]
+                }
+            ]
         }
-        
-        headers_chat = {"Authorization": f"Bearer {DIFY_API_KEY}", "Content-Type": "application/json"}
-        response = requests.post(chat_url, headers=headers_chat, json=payload, timeout=60)
 
-        # === هنا التعديل الأهم لكشف سبب الخطأ ===
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(gemini_url, json=payload, headers=headers, timeout=60)
+
         if response.status_code != 200:
-            error_details = response.text
-            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ خطأ من Dify (الكود {response.status_code}):\n`{error_details}`", parse_mode="Markdown")
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ خطأ من Google Gemini ({response.status_code}):\n`{response.text}`", parse_mode="Markdown")
             return
 
-        result = response.json()
-        if "answer" not in result:
-             bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ Dify لم يرسل إجابة، أرسل هذا بدلاً من ذلك:\n`{result}`", parse_mode="Markdown")
-             return
-             
-        answer = result["answer"]
+        res_data = response.json()
+        try:
+            answer = res_data['candidates'][0]['content']['parts'][0]['text']
+        except Exception:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ لم يتم إرجاع تحليل من الذكاء الاصطناعي.")
+            return
 
         if "NOT_CHART" in answer:
             bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text="⚠️ هذه ليست صورة شارت تداول!")
@@ -230,7 +229,6 @@ def process_chart_image(message):
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=msg.message_id, text=f"❌ خطأ في النظام:\n`{str(e)}`", parse_mode="Markdown")
 
-# === ماسح الأزرار الشامل (أي رسالة نصية تمسح الأزرار القديمة) ===
 @bot.message_handler(func=lambda message: True)
 def clean_old_buttons(message):
     bot.send_message(
@@ -239,7 +237,6 @@ def clean_old_buttons(message):
         reply_markup=types.ReplyKeyboardRemove()
     )
 
-# === إعداد الويب هوك ===
 def setup_webhook():
     try:
         bot.remove_webhook()
@@ -251,3 +248,4 @@ setup_webhook()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
+            
