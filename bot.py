@@ -30,7 +30,7 @@ def save_to_firebase(path, data):
         url = f"{FIREBASE_URL}/{path}.json"
         requests.patch(url, json=data, timeout=10)
     except Exception as e:
-        log(f"Firebase Error: {e}")
+        log(f"[Firebase Error] {e}")
 
 def send_telegram_message(chat_id, text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -47,7 +47,7 @@ def send_telegram_message(chat_id, text):
             payload.pop("parse_mode", None)
             requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        log(f"Telegram Send Error: {e}")
+        log(f"[Telegram Error] {e}")
 
 def send_telegram_action(chat_id, action="typing"):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
@@ -58,12 +58,15 @@ def send_telegram_action(chat_id, action="typing"):
 
 def upload_photo_to_dify(file_id, user_id):
     try:
+        log("--> [1/3] Getting photo URL from Telegram...")
         res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}", timeout=15).json()
         if not res.get("ok"):
             return None, "⚠️ فشل جلب الصورة من تليجرام."
         
         file_path = res["result"]["file_path"]
         download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        
+        log("--> [2/3] Downloading image bytes...")
         img_bytes = requests.get(download_url, timeout=30).content
         
         upload_url = f"{DIFY_API_URL}/files/upload"
@@ -71,18 +74,22 @@ def upload_photo_to_dify(file_id, user_id):
         files = {"file": ("chart.jpg", img_bytes, "image/jpeg")}
         data = {"user": str(user_id)}
         
-        up_res = requests.post(upload_url, headers=headers, files=files, data=data, timeout=60)
+        log("--> [3/3] Uploading image to Dify...")
+        up_res = requests.post(upload_url, headers=headers, files=files, data=data, timeout=45)
         
         if up_res.status_code in [200, 201]:
-            return up_res.json().get("id"), None
+            file_dify_id = up_res.json().get("id")
+            log(f"--> Image uploaded successfully to Dify. File ID: {file_dify_id}")
+            return file_dify_id, None
         else:
+            log(f"--> Dify Upload Failed [{up_res.status_code}]: {up_res.text}")
             return None, f"❌ فشل رفع الصورة إلى Dify [{up_res.status_code}]"
             
     except Exception as e:
+        log(f"--> Upload Exception: {str(e)}")
         return None, f"❌ خطأ أثناء رفع الصورة: {str(e)}"
 
-def call_dify_api(user_id, prompt, upload_file_id=None, retries=3):
-    """دالة الاتصال بـ Dify مع آلية إعادة المحاولة عند حدوث ضغط على السيرفر (503/400)"""
+def call_dify_api(user_id, prompt, upload_file_id=None):
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
         "Content-Type": "application/json"
@@ -104,33 +111,29 @@ def call_dify_api(user_id, prompt, upload_file_id=None, retries=3):
         "files": files
     }
 
-    for attempt in range(1, retries + 1):
-        try:
-            res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=120)
+    try:
+        log("--> Requesting analysis from Dify API...")
+        # خفض المهلة إلى 60 ثانية لمنع التجمد
+        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=60)
+        
+        log(f"--> Dify Response Status: {res.status_code}")
+        if res.status_code == 200:
+            data = res.json()
+            return data.get("answer", "لم يتم استلام رد من النموذج.")
+        else:
+            log(f"--> Dify Error Body: {res.text}")
+            return f"⚠️ تعذر التحليل حالياً من الذكاء الاصطناعي (رمز الخطأ {res.status_code}). يرجى إعادة المحاولة."
             
-            if res.status_code == 200:
-                data = res.json()
-                return data.get("answer", "لم يتم استلام رد من النموذج.")
-            
-            # إذا كان الخطأ بسبب الضغط العالي (503 أو 400)، نعيد المحاولة بعد الانتظار ثوانٍ
-            if res.status_code in [400, 503, 504] and attempt < retries:
-                log(f"Attempt {attempt} failed ({res.status_code}). Retrying in {attempt * 3} seconds...")
-                time.sleep(attempt * 3)
-                continue
-            else:
-                return f"⚠️ خوادم الذكاء الاصطناعي تشهد ضغطاً عالياً حالياً (Error {res.status_code}). يرجى المحاولة مرة أخرى بعد لحظات."
-                
-        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
-            if attempt < retries:
-                time.sleep(attempt * 3)
-                continue
-            return "⏳ استغرق تحليل الصورة وقتاً أطول من المتوقع، يرجى إرسالها مرة أخرى."
-            
-        except Exception as e:
-            return f"❌ حدث خطأ عند الاتصال بـ Dify: {str(e)}"
+    except requests.exceptions.Timeout:
+        log("--> Dify API Timed out (exceeded 60s)!")
+        return "⏳ استغرق النموذج وقتاً طويلاً في المعالجة والتفكير. يرجى إعادة إرسال الصورة مرة أخرى أو اختيار نموذج أسرع في Dify."
+    except Exception as e:
+        log(f"--> Dify Call Exception: {str(e)}")
+        return f"❌ حدث خطأ عند الاتصال بـ Dify: {str(e)}"
 
 def process_message_async(chat_id, user_id, text, photos, caption, first_name, username):
     try:
+        log(f"\n--- Processing Message for User {user_id} ---")
         send_telegram_action(chat_id, "typing")
         
         save_to_firebase(f"users/{user_id}", {
@@ -156,10 +159,12 @@ def process_message_async(chat_id, user_id, text, photos, caption, first_name, u
 
         reply = call_dify_api(user_id, prompt, upload_file_id)
         send_telegram_message(chat_id, reply)
+        log("--- Finished Processing Message ---\n")
     except Exception as main_e:
+        log(f"--> Main Exception: {str(main_e)}")
         send_telegram_message(chat_id, f"❌ حدث خطأ غير متوقع: {str(main_e)}")
 
-@app.route('/', defaults={'path': ''}, methods={'GET', 'POST'})
+@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
 @app.route('/<path:path>', methods=['GET', 'POST'])
 def webhook(path):
     if request.method == 'GET':
