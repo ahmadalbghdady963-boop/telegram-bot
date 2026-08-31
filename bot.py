@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import requests
 import threading
 from flask import Flask, request, jsonify
@@ -75,16 +76,13 @@ def upload_photo_to_dify(file_id, user_id):
         if up_res.status_code in [200, 201]:
             return up_res.json().get("id"), None
         else:
-            try:
-                err_details = up_res.json().get("message", up_res.text)
-            except:
-                err_details = up_res.text
-            return None, f"❌ فشل رفع الصورة إلى Dify [{up_res.status_code}]:\n{err_details}"
+            return None, f"❌ فشل رفع الصورة إلى Dify [{up_res.status_code}]"
             
     except Exception as e:
         return None, f"❌ خطأ أثناء رفع الصورة: {str(e)}"
 
-def call_dify_api(user_id, prompt, upload_file_id=None):
+def call_dify_api(user_id, prompt, upload_file_id=None, retries=3):
+    """دالة الاتصال بـ Dify مع آلية إعادة المحاولة عند حدوث ضغط على السيرفر (503/400)"""
     headers = {
         "Authorization": f"Bearer {DIFY_API_KEY}",
         "Content-Type": "application/json"
@@ -98,43 +96,38 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
             "upload_file_id": upload_file_id
         })
 
-    # دمج التوجيه لحل مشكلة التمييز بين الصور والشارتات
-    system_prompt = (
-        "أنت خبير أسواق مالية. "
-        "مهمتك الأولى: افحص الصورة بدقة. إذا لم تكن الصورة تمثل رسماً بيانياً (شارت) لأسهم أو عملات، "
-        "توقف فوراً ورد بالنص التالي فقط: '❌ عذراً، هذه ليست صورة لشارت مالي. يرجى إرسال شارت صحيح.' "
-        "مهمتك الثانية: إذا تأكدت أنها شارت، قم بتحليلها بدقة واستخراج الاتجاه العام، وأهم مناطق الدعم والمقاومة."
-    )
-    
-    final_query = prompt if prompt else system_prompt
-
     payload = {
         "inputs": {},
-        "query": final_query,
+        "query": prompt if prompt else "قم بتحليل الشارت المرفق وفقاً للتعليمات.",
         "response_mode": "blocking",
         "user": str(user_id),
         "files": files
     }
 
-    try:
-        # تقليل وقت الـ Timeout قليلاً لتجنب تعليق البوت للأساس
-        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=120)
-        
-        if res.status_code == 200:
-            data = res.json()
-            return data.get("answer", "لم يتم استلام رد من النموذج.")
-        else:
-            # سحب تفاصيل الخطأ (خاصة 400) لمعرفة المشكلة من Dify
-            try:
-                error_details = res.json().get("message", res.text)
-            except:
-                error_details = res.text
-            return f"❌ خطأ من الذكاء الاصطناعي [{res.status_code}]:\n{error_details}\n\n*تأكد من تفعيل (Vision) واختيار نموذج يدعم الصور في Dify.*"
+    for attempt in range(1, retries + 1):
+        try:
+            res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=120)
             
-    except requests.exceptions.ReadTimeout:
-        return "❌ خطأ (Timeout 504): استغرق النموذج وقتاً طويلاً جداً في تحليل الصورة. حاول مجدداً أو استخدم نموذجاً أسرع."
-    except Exception as e:
-        return f"❌ حدث خطأ عند الاتصال بـ Dify: {str(e)}"
+            if res.status_code == 200:
+                data = res.json()
+                return data.get("answer", "لم يتم استلام رد من النموذج.")
+            
+            # إذا كان الخطأ بسبب الضغط العالي (503 أو 400)، نعيد المحاولة بعد الانتظار ثوانٍ
+            if res.status_code in [400, 503, 504] and attempt < retries:
+                log(f"Attempt {attempt} failed ({res.status_code}). Retrying in {attempt * 3} seconds...")
+                time.sleep(attempt * 3)
+                continue
+            else:
+                return f"⚠️ خوادم الذكاء الاصطناعي تشهد ضغطاً عالياً حالياً (Error {res.status_code}). يرجى المحاولة مرة أخرى بعد لحظات."
+                
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
+            if attempt < retries:
+                time.sleep(attempt * 3)
+                continue
+            return "⏳ استغرق تحليل الصورة وقتاً أطول من المتوقع، يرجى إرسالها مرة أخرى."
+            
+        except Exception as e:
+            return f"❌ حدث خطأ عند الاتصال بـ Dify: {str(e)}"
 
 def process_message_async(chat_id, user_id, text, photos, caption, first_name, username):
     try:
@@ -147,8 +140,6 @@ def process_message_async(chat_id, user_id, text, photos, caption, first_name, u
         })
 
         upload_file_id = None
-        prompt = ""
-        
         if photos:
             send_telegram_message(chat_id, "⏳ جاري استلام الشارت وتحليله، قد يستغرق الأمر بضع ثوانٍ...")
             file_id = photos[-1]["file_id"]
@@ -156,7 +147,7 @@ def process_message_async(chat_id, user_id, text, photos, caption, first_name, u
             if err_msg:
                 send_telegram_message(chat_id, err_msg)
                 return
-            prompt = caption if caption else ""
+            prompt = caption if caption else "قم ببدء تحليل الشارت المرفق."
         else:
             prompt = text
 
@@ -168,7 +159,7 @@ def process_message_async(chat_id, user_id, text, photos, caption, first_name, u
     except Exception as main_e:
         send_telegram_message(chat_id, f"❌ حدث خطأ غير متوقع: {str(main_e)}")
 
-@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
+@app.route('/', defaults={'path': ''}, methods={'GET', 'POST'})
 @app.route('/<path:path>', methods=['GET', 'POST'])
 def webhook(path):
     if request.method == 'GET':
