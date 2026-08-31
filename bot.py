@@ -8,7 +8,8 @@ from telebot import TeleBot, types
 
 # === المتغيرات الأساسية ===
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6IDVEMfL9X8L9WxGnbVDZxlESyM8F1pdM8auR63j5Uw0w"
+# المفتاح الجديد الخاص بك موجود هنا
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or "AQ.Ab8RN6KHWBDC3-_lWFknh-Pil_YIYl4ofaz7CB99wngLkS8jwQ"
 FIREBASE_URL = os.getenv("FIREBASE_URL")
 PORT = int(os.getenv("PORT", 10000))
 
@@ -131,7 +132,7 @@ def set_language(call):
     bot.answer_callback_query(call.id)
     bot.edit_message_text(text=text, chat_id=call.message.chat.id, message_id=call.message.message_id)
 
-# === معالجة الصور ومطابقة نوع المفتاح تلقائياً ===
+# === معالجة الصور والتواصل مع Gemini ===
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
     threading.Thread(target=process_chart_image, args=(message,)).start()
@@ -175,13 +176,12 @@ def process_chart_image(message):
         downloaded_file = bot.download_file(file_info.file_path)
         base64_image = base64.b64encode(downloaded_file).decode('utf-8')
 
-        # التكيف التلقائي مع نوع المفتاح
-        headers = {"Content-Type": "application/json"}
-        if GEMINI_API_KEY and GEMINI_API_KEY.startswith("AQ."):
-            gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-            headers["Authorization"] = f"Bearer {GEMINI_API_KEY}"
-        else:
-            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        # هنا تم تصحيح طريقة تمرير المفتاح
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY
+        }
+        gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
         prompt_text = (
             "أنت خبير تداول وحسابات مالية. قم بتحليل هذا الشارت المالي بدقة (الاتجاه، الدعوم والمقاومات، التوصية)، "
