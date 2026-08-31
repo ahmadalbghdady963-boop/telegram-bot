@@ -22,7 +22,7 @@ def save_to_firebase(path, data):
         return
     try:
         url = f"{FIREBASE_URL}/{path}.json"
-        requests.patch(url, json=data, timeout=5)
+        requests.patch(url, json=data, timeout=10) # تم زيادة وقت الانتظار قليلاً
     except Exception as e:
         log(f"Firebase Error: {e}")
 
@@ -39,18 +39,11 @@ def send_telegram_message(chat_id, text):
     except Exception as e:
         log(f"Telegram Send Error: {e}")
 
-def send_telegram_action(chat_id, action="typing"):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction"
-    try:
-        requests.post(url, json={"chat_id": chat_id, "action": action}, timeout=5)
-    except Exception:
-        pass
-
 def upload_photo_to_dify(file_id, user_id):
     """رفع صورة الشارت لـ Dify واسترجاع رقم الملف"""
     try:
         log(f"1. Fetching file info from Telegram for file_id: {file_id}")
-        res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}", timeout=10).json()
+        res = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}", timeout=15).json()
         if not res.get("ok"):
             log(f"Telegram getFile error: {res}")
             return None, f"⚠️ فشل جلب الصورة من تليجرام: {res.get('description')}"
@@ -58,7 +51,7 @@ def upload_photo_to_dify(file_id, user_id):
         file_path = res["result"]["file_path"]
         download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
         log(f"2. Downloading image bytes...")
-        img_bytes = requests.get(download_url, timeout=20).content
+        img_bytes = requests.get(download_url, timeout=30).content
         
         upload_url = f"{DIFY_API_URL}/files/upload"
         headers = {"Authorization": f"Bearer {DIFY_API_KEY}"}
@@ -66,7 +59,7 @@ def upload_photo_to_dify(file_id, user_id):
         data = {"user": str(user_id)}
         
         log(f"3. Uploading image to Dify: {upload_url}")
-        up_res = requests.post(upload_url, headers=headers, files=files, data=data, timeout=30)
+        up_res = requests.post(upload_url, headers=headers, files=files, data=data, timeout=60) # زيادة الوقت للرفع
         log(f"Dify upload response [{up_res.status_code}]: {up_res.text}")
         
         if up_res.status_code in [200, 201]:
@@ -106,7 +99,8 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
 
     try:
         log("4. Sending request to Dify chat-messages API...")
-        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=120)
+        # 💡 الحل الأهم هنا: تم رفع الـ timeout إلى 240 ثانية (4 دقائق) بدلاً من 120
+        res = requests.post(f"{DIFY_API_URL}/chat-messages", headers=headers, json=payload, timeout=240)
         log(f"Dify Chat Response [{res.status_code}]: {res.text}")
         
         if res.status_code == 200:
@@ -125,18 +119,30 @@ def call_dify_api(user_id, prompt, upload_file_id=None):
             return answer
         else:
             return f"❌ خطأ من محرك الذكاء الاصطناعي [{res.status_code}]:\n`{res.text}`"
+    except requests.exceptions.Timeout:
+        return "⚠️ استغرق الذكاء الاصطناعي وقتاً أطول من اللازم في تحليل الشارت (Timeout). يرجى المحاولة بصورة أوضح أو في وقت لاحق."
     except Exception as e:
         log(f"Dify Exception: {e}")
         return f"❌ حدث خطأ عند الاتصال بـ Dify: {str(e)}"
 
-def process_message_async(chat_id, user_id, text, photos, caption):
+# تم تمرير معلومات المستخدم لهذه الدالة لتخزينها في الخلفية
+def process_message_async(chat_id, user_id, text, photos, caption, first_name, username):
     try:
         log(f"Start async processing for user {user_id}")
-        send_telegram_action(chat_id, "typing")
         
+        # حفظ بيانات المستخدم في الخلفية لتجنب بطء الـ Webhook
+        save_to_firebase(f"users/{user_id}", {
+            "first_name": first_name,
+            "username": username,
+            "chat_id": chat_id
+        })
+
         upload_file_id = None
         if photos:
             log("Photo detected in message.")
+            # إرسال رسالة تطمين للمستخدم
+            send_telegram_message(chat_id, "⏳ جاري استلام الشارت وتحليله بالذكاء الاصطناعي، قد يستغرق الأمر بضع دقائق...")
+            
             file_id = photos[-1]["file_id"]
             upload_file_id, err_msg = upload_photo_to_dify(file_id, user_id)
             if err_msg:
@@ -145,6 +151,7 @@ def process_message_async(chat_id, user_id, text, photos, caption):
                 return
             prompt = caption if caption else "قم بتحليل الشارت المرفق في الصورة."
         else:
+            send_telegram_message(chat_id, "⏳ جاري التفكير...")
             prompt = text
 
         if not prompt and not upload_file_id:
@@ -160,7 +167,7 @@ def process_message_async(chat_id, user_id, text, photos, caption):
 @app.route('/<path:path>', methods=['GET', 'POST'])
 def webhook(path):
     if request.method == 'GET':
-        return "TradeGuard AI with Firebase is Live!", 200
+        return "TradeGuard AI is Live!", 200
 
     update = request.get_json(force=True, silent=True)
     if not update or "message" not in update:
@@ -174,12 +181,6 @@ def webhook(path):
 
     log(f"Received webhook request from user {user_id}")
 
-    save_to_firebase(f"users/{user_id}", {
-        "first_name": first_name,
-        "username": username,
-        "chat_id": chat_id
-    })
-
     text = msg.get("text", "")
     photos = msg.get("photo", None)
     caption = msg.get("caption", "")
@@ -187,10 +188,18 @@ def webhook(path):
     if text == "/start":
         welcome = "أهلاً بك في **TradeGuard AI** 📈\nأنا مساعدك الذكي لتحليل الأسواق المالية والشارتات.\n\nأرسل لي أي استفسار أو صورة للشارت وسأقوم بتحليله فوراً!"
         send_telegram_message(chat_id, welcome)
+        
+        # حفظ بيانات المستخدم في الخلفية عند الـ start
+        threading.Thread(target=save_to_firebase, args=(f"users/{user_id}", {
+            "first_name": first_name,
+            "username": username,
+            "chat_id": chat_id
+        })).start()
+        
         return jsonify({"status": "ok"}), 200
 
-    # معالجة الطلب في الخلفية
-    threading.Thread(target=process_message_async, args=(chat_id, user_id, text, photos, caption)).start()
+    # معالجة الطلب في الخلفية لتسريع الرد على تليغرام
+    threading.Thread(target=process_message_async, args=(chat_id, user_id, text, photos, caption, first_name, username)).start()
 
     return jsonify({"status": "ok"}), 200
 
