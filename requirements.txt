@@ -1,5 +1,6 @@
-python-telegram-bot==21.4
-fastapi
-uvicorn
-httpx
+pyTelegramBotAPI
+flask
+requests
 google-generativeai
+pillow
+pytz
