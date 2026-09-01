@@ -5,44 +5,43 @@ import telebot
 from flask import Flask
 from threading import Thread
 
-# جلب المفاتيح من متغيرات البيئة في Render
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# سيرفر وهمي لإبقاء تطبيق Render نشطاً
 @app.route('/')
 def home():
-    return "TradeGuard AI with Groq is running smoothly!"
+    return "TradeGuard AI is running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# رسالة الترحيب
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(message, "أهلاً بك في TradeGuard AI 📈\nأرسل لي أي صورة لشارت وسأقوم بتحليلها فوراً عبر Groq!")
 
-# التعامل مع الصور
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل، قد يستغرق الأمر بضع ثوانٍ...')
+    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل عبر Groq...')
     
     try:
-        # 1. جلب الصورة من تليجرام
+        if not GROQ_API_KEY:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: متغير GROQ_API_KEY غير معرف في Render.")
+            return
+
+        # 1. جلب الصورة
         file_info = bot.get_file(message.photo[-1].file_id)
         file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
-        
         image_response = requests.get(file_url)
         base64_image = base64.b64encode(image_response.content).decode('utf-8')
         data_url = f"data:image/jpeg;base64,{base64_image}"
 
-        # 2. إرسال الصورة والتعليمات إلى Groq
+        # 2. إرسال الصورة إلى Groq
         headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
             "Content-Type": "application/json"
         }
         
@@ -71,17 +70,24 @@ def handle_photo(message):
 
         groq_response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
         
+        print(f"Groq Status Code: {groq_response.status_code}")
+        print(f"Groq Response: {groq_response.text}")
+
         if groq_response.status_code == 200:
             result_text = groq_response.json()['choices'][0]['message']['content']
             bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=result_text)
         else:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ من الخادم، يرجى المحاولة لاحقاً.")
+            error_details = groq_response.json().get('error', {}).get('message', groq_response.text)
+            bot.edit_message_text(
+                chat_id=message.chat.id, 
+                message_id=status_msg.message_id, 
+                text=f"❌ خطأ من Groq (رمز {groq_response.status_code}):\n{error_details}"
+            )
 
     except Exception as e:
-        print("Error:", e)
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ حدث خطأ داخلي أثناء معالجة الصورة.")
+        print("Error:", str(e))
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=f"❌ حدث خطأ أثناء معالجة الصورة:\n{str(e)}")
 
-# إغلاق Webhook وتفعيل Polling
 if __name__ == "__main__":
     Thread(target=run_flask).start()
     bot.remove_webhook()
