@@ -1,6 +1,7 @@
 import os
 import logging
 import base64
+import html
 from contextlib import asynccontextmanager
 import httpx
 import uvicorn
@@ -15,14 +16,14 @@ from telegram.ext import (
 )
 import google.generativeai as genai
 
-# 1. إعداد نظام السجلات
+# 1. إعداد نظام التسجيل (Logging)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# 2. جلب وتنظيف المتغيرات البيئية
+# 2. تنقية متغيرات البيئة من Render
 TOKEN = (
     os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or ""
 ).strip().strip('"').strip("'")
@@ -31,7 +32,6 @@ RAW_WEBHOOK_URL = (
     os.environ.get("WEBHOOK_URL") or ""
 ).strip().strip('"').strip("'").rstrip("/")
 
-# تنقية وإصلاح رابط الـ Webhook تلقائياً
 WEBHOOK_URL = ""
 if RAW_WEBHOOK_URL:
     if not RAW_WEBHOOK_URL.startswith("http://") and not RAW_WEBHOOK_URL.startswith("https://"):
@@ -51,7 +51,7 @@ if GEMINI_API_KEY:
 # تهيئة تطبيق تليجرام
 ptb_app = Application.builder().token(TOKEN).build() if TOKEN else None
 
-# 3. إدارة دورة حياة FastAPI المحمية من الكراش
+# 3. إدارة دورة حياة FastAPI (Lifespan)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if ptb_app:
@@ -61,14 +61,14 @@ async def lifespan(app: FastAPI):
 
         if WEBHOOK_URL and TOKEN:
             full_webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-            logger.info(f"🔗 محاولة ربط Webhook على: {full_webhook_url}")
+            logger.info(f"🔗 ربط Webhook على الرابط: {full_webhook_url}")
             try:
                 success = await ptb_app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
-                logger.info(f"✅ تم ضبط الـ Webhook بنجاح: {success}")
+                logger.info(f"✅ تم ضبط Webhook بنجاح: {success}")
             except Exception as e:
-                logger.error(f"⚠️ تعذر ضبط الـ Webhook: {e}. يرجى التحقق من صحة WEBHOOK_URL في Render!")
+                logger.error(f"⚠️ فشل ضبط Webhook: {e}")
         else:
-            logger.warning("⚠️ يرجى التأكد من ضبط المتغيرات WEBHOOK_URL و TELEGRAM_BOT_TOKEN!")
+            logger.warning("⚠️ يرجى ضبط WEBHOOK_URL و TELEGRAM_BOT_TOKEN في Render!")
 
     yield
 
@@ -79,59 +79,61 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# 4. دوال التعامل مع الأوامر والرسائل
+# 4. دوال التعامل مع أوامر البوت
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["👤 حسابي", "💎 الاشتراك"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    user_name = update.effective_user.first_name if update.effective_user else "المستخدم"
+    user_name = html.escape(update.effective_user.first_name if update.effective_user else "المستخدم")
     welcome_text = (
-        f"مرحباً بك {user_name} في **TradeGuard AI**! 🤖📈\n\n"
+        f"مرحباً بك {user_name} في <b>TradeGuard AI</b>! 🤖📈\n\n"
         f"أنا نظام التحليل الفني الذكي المخصص لفحص الشموع اليابانية والأسواق المالية.\n\n"
-        f"📸 **كيفية الاستخدام**:\n"
+        f"📸 <b>كيفية الاستخدام</b>:\n"
         f"أرسل صورة الرسم البياني (الشارت) مباشرة وسيقوم الذكاء الاصطناعي بتحليل الاتجاه والدعم والمقاومة فوراً!"
     )
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="HTML")
 
 async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     account_info = (
-        "👤 **تفاصيل حسابك**:\n"
+        "👤 <b>تفاصيل حسابك</b>:\n"
         "━━━━━━━\n"
         "• الحالة: نشط ⚡️\n"
         "• نوع الاشتراك: الخطة المجانية\n"
         "• رصيد التحليلات: غير محدود ♾️"
     )
-    await update.message.reply_text(account_info, parse_mode="Markdown")
+    await update.message.reply_text(account_info, parse_mode="HTML")
 
 async def subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sub_info = (
-        "💎 **خطط الاشتراك**:\n"
+        "💎 <b>خطط الاشتراك</b>:\n"
         "━━━━━━━\n"
         "أنت حالياً تتمتع بالخطة المجانية الكاملة مقدمة من TradeGuard AI 🚀"
     )
-    await update.message.reply_text(sub_info, parse_mode="Markdown")
+    await update.message.reply_text(sub_info, parse_mode="HTML")
 
 async def analyze_image_with_gemini(image_bytes: bytes) -> str:
     if not GEMINI_API_KEY:
         return "❌ خطأ: لم يتم ضبط مفتاح GEMINI_API_KEY في متغيرات البيئة."
 
+    # توجيه Gemini بالإبقاء على الأقواس [] في التنسيق النهائي
     prompt = """أنت محلل أسواق مالية صارم وخبير للشموع اليابانية (TradeGuard AI).
 القاعدة الأولى: افحص الصورة أولاً. إذا لم تكن الصورة تحتوي على رسم بياني (شارت) لأسعار وشموع يابانية مالية، توقف فوراً وأجب فقط بالرسالة التالية:
 "⚠️ عذراً، هذه الصورة لا تحتوي على رسم بياني للشمعات اليابانية (Candlestick Chart)."
 
-القاعدة الثانية: إذا كانت الصورة شارت صحيح، استخرج التوصية بالشكل التالي:
+القاعدة الثانية: إذا كانت الصورة شارت صحيح، استخرج التوصية واستخدم الأقواس [] المحددة حول النتائج بالشكل التالي تماماً:
 
-📊 **تحليل TradeGuard AI**
+📊 <b>تحليل TradeGuard AI</b>
 ━━━━━━━━━━━━━━━━━━
-• **الاتجاه العام**: [صاعد / هابط / عرضي]
-• **مستوى المقاومة الأقوى**: [السعر]
-• **مستوى الدعم الأقوى**: [السعر]
-• **النصيحة والتوصية**: [جملة واحدة فقط توضح القرار المناسب]
+• <b>الاتجاه العام</b>: [ضع الاتجاه هنا: صاعد / هابط / عرضي]
+• <b>مستوى المقاومة الأقوى</b>: [ضع سعر المقاومة هنا]
+• <b>مستوى الدعم الأقوى</b>: [ضع سعر الدعم هنا]
+• <b>النصيحة والتوصية</b>: [ضع النصيحة في جملة واحدة هنا]
 ━━━━━━━━━━━━━━━━━━"""
 
     models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
     image_part = {"mime_type": "image/jpeg", "data": image_bytes}
 
+    # محاولة بواسطة SDK الرسمي
     for model_name in models_to_try:
         try:
             model = genai.GenerativeModel(model_name)
@@ -141,7 +143,7 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
         except Exception as e:
             logger.warning(f"SDK model {model_name} failed: {e}")
 
-    # fallback عبر HTTP المباشر مع الهيدر الصحيح
+    # محاولة احتياطية بواسطة HTTP REST Direct Call
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     payload = {
         "contents": [{
@@ -180,27 +182,28 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
 async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         processing_msg = await update.message.reply_text("⏳ جاري فحص وتحليل الشارت بواسطة الذكاء الاصطناعي...")
+        
         photo_file = await update.message.photo[-1].get_file()
         image_bytes = await photo_file.download_as_bytearray()
         
         ai_response = await analyze_image_with_gemini(bytes(image_bytes))
         
         try:
-            await processing_msg.edit_text(ai_response, parse_mode="Markdown")
+            await processing_msg.edit_text(ai_response, parse_mode="HTML")
         except Exception:
             await processing_msg.edit_text(ai_response)
     except Exception as e:
         logger.error(f"Error handling image: {e}", exc_info=True)
         await update.message.reply_text("❌ حدث خطأ أثناء معالجة الصورة.")
 
-# ربط الأوامر
+# 5. تسجيل الأوامر والمعالجات
 if ptb_app:
     ptb_app.add_handler(CommandHandler("start", start_command))
     ptb_app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
     ptb_app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
     ptb_app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
 
-# 5. مسارات Health Check و Webhook
+# 6. مسارات Health Check و Webhook
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root_health_check():
     return {"status": "ok", "service": "TradeGuard AI"}
