@@ -23,27 +23,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 2. تنقية متغيرات البيئة من Render
+# 2. تنقية متغيرات البيئة
 TOKEN = (
     os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or ""
 ).strip().strip('"').strip("'")
 
-# استخراج اسم النطاق تلقائياً من Render إذا لم يتم إدخال WEBHOOK_URL
-render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
-raw_webhook_url = (
-    os.environ.get("WEBHOOK_URL") or render_host or ""
-).strip().strip('"').strip("'")
+# استخراج رابط المنصة تلقائياً بشكل مضمون 100% (لتجنب أخطاء النسخ واللصق)
+def get_webhook_url():
+    # Render يوفر هذا المتغير تلقائياً، وهو مضمون وصحيح
+    render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
+    user_webhook = os.environ.get("WEBHOOK_URL", "").strip()
+    
+    domain = ""
+    # الأولوية دائماً لمتغير Render التلقائي لأنه دقيق 100%
+    if render_host:
+        domain = render_host
+    elif user_webhook:
+        # إذا أدخل المستخدم الرابط يدوياً، ننظفه من أي أقواس أو مسافات أو نصوص زائدة
+        match = re.search(r"([a-zA-Z0-9\-\.]+\.onrender\.com)", user_webhook)
+        if match:
+            domain = match.group(1)
+        else:
+            domain = re.sub(r"^https?://", "", user_webhook)
+            domain = re.sub(r"[^a-zA-Z0-9\-\.]", "", domain)
+            
+    if domain:
+        return f"https://{domain}/webhook"
+    return ""
 
-# تنظيف الرابط من أي منافذ أو مسافات
-raw_webhook_url = re.sub(r":\d+", "", raw_webhook_url).rstrip("/")
-
-if raw_webhook_url:
-    if not raw_webhook_url.startswith("http"):
-        WEBHOOK_URL = f"https://{raw_webhook_url}"
-    else:
-        WEBHOOK_URL = raw_webhook_url
-else:
-    WEBHOOK_URL = ""
+WEBHOOK_URL = get_webhook_url()
 
 PORT = int(os.environ.get("PORT", "10000"))
 GEMINI_API_KEY = (
@@ -57,7 +65,7 @@ if GEMINI_API_KEY:
 # تهيئة تطبيق تليجرام
 ptb_app = Application.builder().token(TOKEN).build() if TOKEN else None
 
-# 3. إدارة دورة حياة FastAPI (Startup / Shutdown)
+# 3. إدارة دورة حياة FastAPI
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if ptb_app:
@@ -66,10 +74,9 @@ async def lifespan(app: FastAPI):
         await ptb_app.start()
 
         if WEBHOOK_URL and TOKEN:
-            full_webhook_url = f"{WEBHOOK_URL}/webhook"
-            logger.info(f"🔗 محاولة ربط Webhook على: {full_webhook_url}")
+            logger.info(f"🔗 محاولة ربط Webhook على الرابط النهائي الدقيق: {WEBHOOK_URL}")
             try:
-                success = await ptb_app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
+                success = await ptb_app.bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
                 logger.info(f"✅ تم ضبط الـ Webhook بنجاح: {success}")
             except Exception as e:
                 logger.error(f"❌ تعذر ضبط الـ Webhook: {e}")
@@ -192,7 +199,6 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         ai_response = await analyze_image_with_gemini(bytes(image_bytes))
         
-        # إرسال النص كنص عادي بدون parse_mode لتفادي أي مشاكل مع الأقواس []
         await processing_msg.edit_text(ai_response)
     except Exception as e:
         logger.error(f"Error handling image: {e}", exc_info=True)
