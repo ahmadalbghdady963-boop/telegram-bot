@@ -12,22 +12,21 @@ from telegram.ext import (
     ContextTypes
 )
 
-# 1. إعداد نظام تسجيل الأخطاء (Logging)
+# 1. إعداد نظام التسجيل (Logging)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+logger = logger = logging.getLogger(__name__)
 
-# 2. استدعاء المتغيرات البيئية من Render
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# 2. جلب المتغيرات مع دعم اسم المتغير الموجود في Render (TELEGRAM_BOT_TOKEN)
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", "10000"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 # 3. الأوامر الأساسية للبوت
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الرد على أمر /start"""
     user_name = update.message.from_user.first_name if update.message.from_user else "المستخدم"
     welcome_text = (
         f"مرحباً بك {user_name} في TradeGuard AI! 🤖📈\n\n"
@@ -37,30 +36,28 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text)
 
 async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الرد على أمر حسابي"""
     await update.message.reply_text("👤 **تفاصيل حسابك**:\nالاشتراك: مجاني (حساب نشط ⚡️)\nالحد اليومي: غير محدود")
 
 async def subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الرد على أمر الاشتراك"""
     await update.message.reply_text("💎 **خطط الاشتراك**:\nأنت حالياً تستخدم الخطة المجانية. الخطط المتقدمة ستتوفر قريباً!")
 
-# 4. دالة الاتصال بنموذج Gemini API المباشر
+# 4. دالة التحليل المالي عبر Gemini API
 async def analyze_image_with_gemini(base64_image: str) -> str:
     if not GEMINI_API_KEY:
         return "❌ خطأ: مفتاح GEMINI_API_KEY غير متوفر في متغيرات البيئة على Render."
 
     prompt = """أنت محلل أسواق مالية صارم وخبير للشموع اليابانية (TradeGuard AI).
-القاعدة الأولى الحازمة: افحص الصورة أولاً. إذا لم تكن الصورة تحتوي على رسم بياني (شارت) لأسعار وشموع يابانية مالية، توقف فوراً وأجب فقط بالرسالة التالية دون أي إضافات:
+القاعدة الأولى: افحص الصورة أولاً. إذا لم تكن الصورة تحتوي على رسم بياني (شارت) لأسعار وشموع يابانية مالية، توقف فوراً وأجب فقط بالرسالة التالية:
 "⚠️ عذراً، هذه الصورة لا تحتوي على رسم بياني للشمعات اليابانية (Candlestick Chart)."
 
-القاعدة الثانية: إذا كانت الصورة تحتوي على رسم بياني صحيح للشموع اليابانية، قم بتحليل الشارت واستخراج البيانات الفنية فوراً بالصيغة الهيكلية التالية المحددة:
+القاعدة الثانية: إذا كانت الصورة شارت صحيح، استخرج التوصية بالشكل التالي:
 
 📊 **تحليل TradeGuard AI**
 ━━━━━━━━━━━━━━━━━━
 • **الاتجاه العام**: [صاعد / هابط / عرضي]
 • **مستوى المقاومة الأقوى**: [السعر]
 • **مستوى الدعم الأقوى**: [السعر]
-• **النصيحة والتوصية**: [جملة واحدة فقط توضح القرار المناسب بناء على السلوك السعري]
+• **النصيحة والتوصية**: [جملة واحدة فقط توضح القرار المناسب]
 ━━━━━━━━━━━━━━━━━━"""
 
     payload = {
@@ -77,7 +74,6 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
         }]
     }
 
-    # قائمة النماذج المتاحة للتجربة التلقائية لضمان عدم حدوث خطأ 404
     models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
     
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -88,32 +84,25 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
                 response = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
                 if response.status_code == 200:
                     res_json = response.json()
-                    text = res_json['candidates'][0]['content']['parts'][0]['text']
-                    return text
+                    return res_json['candidates'][0]['content']['parts'][0]['text']
                 else:
-                    last_error = f"رمز الاستجابة ({response.status_code}) من النموذج {model}"
-                    logger.warning(f"Model {model} failed: {response.text}")
+                    last_error = f"رمز ({response.status_code})"
             except Exception as e:
                 last_error = str(e)
-                logger.error(f"Exception for {model}: {e}")
 
-    return f"❌ فشل الاتصال بخدمة التحليل الفني.\nالتفاصيل: {last_error}"
+    return f"❌ فشل الاتصال بخدمة التحليل الفني. التفاصيل: {last_error}"
 
-# 5. معالجة الصور واستدعاء التحليل
+# 5. استلام الصور
 async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة الصور المرسلة للتحليل"""
     try:
         processing_msg = await update.message.reply_text("⏳ جاري فحص وتحليل الشارت بواسطة الذكاء الاصطناعي...")
         
-        # تنزيل الصورة بأعلى دقة
         photo_file = await update.message.photo[-1].get_file()
         image_bytes = await photo_file.download_as_bytearray()
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
-        # الاتصال بـ Gemini API
         ai_response = await analyze_image_with_gemini(base64_image)
         
-        # تحديث الرسالة بالنتيجة النهائية
         try:
             await processing_msg.edit_text(ai_response, parse_mode="Markdown")
         except Exception:
@@ -124,35 +113,31 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"❌ حدث خطأ أثناء معالجة الصورة: {str(e)}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """التقاط وإدارة الأخطاء العامة"""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
-    if isinstance(update, Update) and update.message:
-        await update.message.reply_text("⚠️ حدث خطأ داخلي في الخادم. تم تسجيل الخطأ للمراجعة.")
 
-# 6. التشغيل الرئيسي
+# 6. تشغيل البوت
 def main():
     if not TOKEN or not WEBHOOK_URL:
-        logger.error("❌ المتغيرات البيئية TELEGRAM_TOKEN أو WEBHOOK_URL مفقودة!")
+        logger.error("❌ المتغيرات البيئية TELEGRAM_BOT_TOKEN أو WEBHOOK_URL مفقودة!")
         return
+
+    clean_webhook = WEBHOOK_URL.rstrip('/')
 
     app = Application.builder().token(TOKEN).build()
 
-    # تسجيل الأوامر
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
     app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
     app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
-
     app.add_error_handler(error_handler)
 
-    logger.info("🚀 جاري بدء تشغيل البوت عبر Webhook...")
+    logger.info("🚀 جاري بدء تشغيل البوت...")
     
-    # التعديل الجوهري: إضافة url_path=TOKEN لربط المسار بشكل صحيح ومنع خطأ 404
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}",
+        webhook_url=f"{clean_webhook}/{TOKEN}",
         drop_pending_updates=True
     )
 
