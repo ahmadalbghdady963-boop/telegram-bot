@@ -10,15 +10,15 @@ RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# التهيئة المباشرة لمفتاح جوجل
+# تهيئة مفتاح جوجل
 genai.configure(api_key=GEMINI_API_KEY)
 
-# استخدام النموذج المدعوم للرؤية والنصوص بصيغته الرسمية المستقرة
-model = genai.GenerativeModel('gemini-1.5-flash')
+# الحل الحاسم: استخدام الصيغة الكاملة والمدعومة رسمياً للموديل لتجاوز خطأ 404
+model = genai.GenerativeModel('models/gemini-1.5-flash')
 
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI is active!"
+    return "TradeGuard AI is running and ready!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -33,7 +33,7 @@ def send_welcome(message):
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    status_msg = bot.reply_to(message, '⏳ جاري تحليل الشارت بدقة...')
+    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل الفني...')
     
     try:
         if not GEMINI_API_KEY:
@@ -58,7 +58,7 @@ def handle_photo(message):
 - نصيحة سريعة: (جملة واحدة فقط)
 لا تكتب أي مقدمات أو خاتمات."""
 
-        # إرسال الطلب باستخدام النموذج الصحيح
+        # إرسال الطلب
         response = model.generate_content([prompt, image_part])
         
         bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=response.text)
