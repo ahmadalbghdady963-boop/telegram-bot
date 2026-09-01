@@ -13,28 +13,33 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+import google.generativeai as genai
 
-# 1. إعداد سجلات النظام
+# 1. إعداد نظام السجلات
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# 2. قراءة متغيرات البيئة
+# 2. قراءة متغيرات البيئة من Render
 TOKEN = (os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or "").strip()
 WEBHOOK_URL = (os.environ.get("WEBHOOK_URL") or "").strip().rstrip("/")
 PORT = int(os.environ.get("PORT", "10000"))
 GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API") or "").strip()
 
+# تهيئة مكتبة Gemini بالمفتاح (سواء كان AIzaSy أو AQ...)
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+
 # تهيئة تطبيق تليجرام
 ptb_app = Application.builder().token(TOKEN).build() if TOKEN else None
 
-# 3. إدارة دورة حياة التطبيق (Lifespan الحديثة لـ FastAPI)
+# 3. إدارة دورة حياة خادم FastAPI (Lifespan)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if ptb_app:
-        logger.info("⚡ بدء تشغيل محرك تليجرام TradeGuard AI...")
+        logger.info("⚡ بدء تشغيل محرك TradeGuard AI...")
         await ptb_app.initialize()
         await ptb_app.start()
 
@@ -52,10 +57,9 @@ async def lifespan(app: FastAPI):
         await ptb_app.stop()
         await ptb_app.shutdown()
 
-# إنشاء تطبيق FastAPI
 app = FastAPI(lifespan=lifespan)
 
-# 4. دوال التعامل مع أوامر البوت
+# 4. دوال معالجة أوامر تليجرام
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["👤 حسابي", "💎 الاشتراك"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -83,11 +87,11 @@ async def subscription_command(update: Update, context: ContextTypes.DEFAULT_TYP
     sub_info = (
         "💎 **خطط الاشتراك**:\n"
         "━━━━━━━\n"
-        "أنت حالياً تمتع بالخطة المجانية الكاملة مقدمة من TradeGuard AI 🚀"
+        "أنت حالياً تتمتع بالخطة المجانية الكاملة مقدمة من TradeGuard AI 🚀"
     )
     await update.message.reply_text(sub_info, parse_mode="Markdown")
 
-async def analyze_image_with_gemini(base64_image: str) -> str:
+async def analyze_image_with_gemini(image_bytes: bytes) -> str:
     if not GEMINI_API_KEY:
         return "❌ خطأ: لم يتم ضبط مفتاح GEMINI_API_KEY في متغيرات البيئة."
 
@@ -105,6 +109,21 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
 • **النصيحة والتوصية**: [جملة واحدة فقط توضح القرار المناسب]
 ━━━━━━━━━━━━━━━━━━"""
 
+    # --- المحاولة الأولى: باستخدام SDK الرسمي (يتعامل تلقائياً مع مفاتيح AQ...) ---
+    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
+    image_part = {"mime_type": "image/jpeg", "data": image_bytes}
+
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content([prompt, image_part])
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            logger.warning(f"SDK model {model_name} failed: {e}")
+
+    # --- المحاولة الثانية (احتياطية): استخدام HTTP REST مع إرسال x-goog-api-key Header ---
+    base64_image = base64.b64encode(image_bytes).decode('utf-8')
     payload = {
         "contents": [{
             "parts": [
@@ -114,28 +133,32 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
         }]
     }
 
-    models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-pro"
-    ]
-    
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        last_error = ""
-        for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-            try:
-                response = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
-                if response.status_code == 200:
-                    res_json = response.json()
-                    return res_json['candidates'][0]['content']['parts'][0]['text']
-                else:
-                    last_error = f"رمز الاستجابة ({response.status_code})"
-            except Exception as e:
-                last_error = str(e)
+    # تخصيص הـ Headers لتمرير المفاتيح بصيغة AQ...
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY
+    }
 
-    return f"❌ تعذر الاتصال بمحرك التحليل. التفاصيل: {last_error}"
+    rest_endpoints = [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
+    ]
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        last_err = ""
+        for url in rest_endpoints:
+            try:
+                resp = await client.post(url, json=payload, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data['candidates'][0]['content']['parts'][0]['text']
+                else:
+                    last_err = f"رمز ({resp.status_code})"
+            except Exception as ex:
+                last_err = str(ex)
+
+    return f"❌ تعذر الاتصال بمحرك التحليل. التفاصيل: {last_err}"
 
 async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -143,9 +166,8 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         photo_file = await update.message.photo[-1].get_file()
         image_bytes = await photo_file.download_as_bytearray()
-        base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
-        ai_response = await analyze_image_with_gemini(base64_image)
+        ai_response = await analyze_image_with_gemini(bytes(image_bytes))
         
         try:
             await processing_msg.edit_text(ai_response, parse_mode="Markdown")
@@ -153,7 +175,7 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await processing_msg.edit_text(ai_response)
     except Exception as e:
         logger.error(f"Error handling image: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ حدث خطأ أثناء معالجة الصورة.")
+        await update.message.reply_text("❌ حدث خطأ أثناء معالجة الصورة.")
 
 # تسجيل المعالجات
 if ptb_app:
@@ -162,7 +184,7 @@ if ptb_app:
     ptb_app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
     ptb_app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
 
-# 5. نقاط نهاية FastAPI
+# 5. نقاط نهاية السيرفر لـ Render Health Check
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root_health_check():
     return {"status": "ok", "service": "TradeGuard AI"}
