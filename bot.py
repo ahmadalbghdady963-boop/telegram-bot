@@ -11,10 +11,9 @@ import io
 # ==================== 1. التكوين والتهيئات ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-ADMIN_ID = os.environ.get("ADMIN_ID")  # معرف الآدمين بالتيليجرام (مثال: 123456789)
+ADMIN_ID = os.environ.get("ADMIN_ID")
 SERVER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://telegram-bot-pqy3.onrender.com")
 
-# إعداد Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
 app = Flask(__name__)
@@ -65,11 +64,10 @@ def set_user_language(user_id, lang):
         conn.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
         conn.commit()
 
-# ==================== 3. ميزة البقاء مستيقظاً (Self-Ping Keep-Alive) ====================
+# ==================== 3. ميزة البقاء مستيقظاً ====================
 def keep_alive():
-    """تمنع استضافة Render المجانية من حالة النوم باستدعاء السيرفر كل 10 دقائق"""
     while True:
-        time.sleep(600) # كل 10 دقائق
+        time.sleep(600)
         try:
             if SERVER_URL:
                 requests.get(SERVER_URL, timeout=10)
@@ -139,38 +137,38 @@ def send_subscription_info(chat_id, lang='en'):
         )
     send_telegram_message(chat_id, msg)
 
-# ==================== 5. تحليل الشارت بواسطة الذكاء الاصطناعي ====================
+# ==================== 5. تحليل الشارت ====================
 def analyze_chart_with_gemini(image_bytes, lang='en'):
     prompt_ar = """
-    أنت خبير تحليل فني وتداول عملات وأسهم محترف. قم بتحليل صورة الشارت المرفقة بدقة عالية وقدم تقريراً فنياً باللغة العربية بالتنسيق التالي حصراً:
+    أنت خبير تحليل فني وتداول محترف. قم بتحليل صورة الشارت المرفقة بدقة وقدم التقرير الفني حصراً بالتنسيق التالي:
 
-    1. اتجاه السوق (Market Trend): شرح مختصر لاتجاه الحركة الحالية والهيكلية.
+    1. اتجاه السوق (Market Trend): شرح مختصر للهيكل والاتجاه.
     2. المستويات الرئيسية:
-       - المقاومات (Key Resistances): حدد النقاط بدقة.
-       - الدعوم (Key Supports): حدد النقاط بدقة.
+       - المقاومات (Key Resistances): حدد الأرقام بدقة.
+       - الدعوم (Key Supports): حدد الأرقام بدقة.
     3. تفاصيل الصفقة المقترحة (Trade Setup):
-       - نقطة الدخول للصفقة (Entry Point): حدد السعر أو المنطقة المناسبة للدخول.
-       - مكان وقف الخسارة (Stop Loss): حدد مستوى إيقاف الخسارة بدقة لحماية رأس المال.
-       - مكان المكسب الأول (Take Profit 1): الهدف الأول لربح الصفقة.
-       - مكان المكسب الثاني (Take Profit 2): الهدف الثاني لربح الصفقة.
-    4. نسبة نجاح الصفقة (Probability of Success): اذكر النسبة المئوية المتوقعة (مثال 65%).
-    5. الخلاصة والنصيحة (Conclusion & Advice): نصيحة صريحة (انتظار / شراء / بيع) مع التوجيه المتزن.
+       - نقطة الدخول للصفقة (Entry Point): حدد سعر أو منطقة الدخول.
+       - مكان وقف الخسارة (Stop Loss): حدد مستوى إيقاف الخسارة.
+       - مكان المكسب الأول (Take Profit 1): الهدف الأول للربح.
+       - مكان المكسب الثاني (Take Profit 2): الهدف الثاني للربح.
+    4. نسبة نجاح الصفقة (Probability of Success): نسبة مئوية متوقعة (مثل 65%).
+    5. الخلاصة والنصيحة (Conclusion & Advice): توصية صريحة (انتظار / شراء / بيع).
     """
 
     prompt_en = """
-    You are a professional technical analysis trader. Analyze the attached chart image with precision and provide a technical report in English strictly following this structure:
+    You are a professional technical analysis trader. Analyze the attached chart image and format the reply strictly as follows:
 
-    1. Market Trend: Concise structure and current momentum breakdown.
+    1. Market Trend: Structure and momentum analysis.
     2. Key Levels:
        - Key Resistances: Exact levels.
        - Key Supports: Exact levels.
     3. Trade Setup Details:
        - Entry Point: Precise entry price or buy/sell zone.
-       - Stop Loss: Precise level to stop losses and manage risk.
-       - Take Profit 1 (TP1): First target for taking profits.
-       - Take Profit 2 (TP2): Second target for taking profits.
+       - Stop Loss: Precise stop loss level.
+       - Take Profit 1 (TP1): First target level.
+       - Take Profit 2 (TP2): Second target level.
     4. Probability of Success: Estimated percentage (e.g., 65%).
-    5. Conclusion & Advice: Direct action recommendation (WAIT / BUY / SELL) with clear context.
+    5. Conclusion & Advice: Direct action recommendation (WAIT / BUY / SELL).
     """
 
     prompt = prompt_ar if lang == 'ar' else prompt_en
@@ -182,7 +180,6 @@ def analyze_chart_with_gemini(image_bytes, lang='en'):
         return response.text
     except Exception as e:
         print(f"Gemini API Error: {e}")
-        # تجربة نموذج بديل في حال وجود ضغط على النموذج الرئيسي
         try:
             model = genai.GenerativeModel('gemini-2.0-flash')
             response = model.generate_content([prompt, image])
@@ -192,19 +189,16 @@ def analyze_chart_with_gemini(image_bytes, lang='en'):
             return None
 
 def process_photo_async(chat_id, user_id, photo_file_id, lang):
-    # إرسال رسالة انتظار للمستخدم
     wait_msg = "⏳ Please wait, performing accurate technical analysis..." if lang != 'ar' else "⏳ جاري تحليل الشارت بدقة، يرجى الانتظار..."
     send_telegram_message(chat_id, wait_msg)
 
     try:
-        # جلب الصورة من سرفرات تيليجرام
         file_info_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={photo_file_id}"
         res = requests.get(file_info_url).json()
         file_path = res['result']['file_path']
         file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
         img_data = requests.get(file_url).content
 
-        # التحليل بواسطة الذكاء الاصطناعي
         analysis = analyze_chart_with_gemini(img_data, lang)
 
         if analysis:
@@ -217,13 +211,14 @@ def process_photo_async(chat_id, user_id, photo_file_id, lang):
         err_msg = "❌ حدث خطأ أثناء المعالجة، يرجى المحاولة لاحقاً." if lang == 'ar' else "❌ Error occurred. Please try again."
         send_telegram_message(chat_id, err_msg)
 
-# ==================== 6. معالجة تحديثات تيليجرام ====================
-@app.route("/", methods=["GET", "POST"])
-def webhook():
+# ==================== 6. معالجة الـ Webhook المحدثة ====================
+@app.route('/', defaults={'path': ''}, methods=['GET', 'POST'])
+@app.route('/<path:path>', methods=['GET', 'POST'])
+def webhook(path):
     if request.method == "GET":
         return "TradeGuard AI Bot is Running 24/7!", 200
 
-    update = request.get_json()
+    update = request.get_json(silent=True)
     if not update or "message" not in update:
         return "OK", 200
 
@@ -237,25 +232,23 @@ def webhook():
     trials = user["trials"]
     is_vip = user["is_vip"]
 
-    # --- معالجة الصور المرسلة ---
+    # معالجة الصور
     if "photo" in message:
-        # التحقق من المحاولات أو اشتراك VIP
         if not is_vip and trials <= 0:
             msg_out = "⚠️ لقد استنفذت جميع المحاولات المجانية.\nيرجى الاشتراك للاستمرار في استخدام البوت." if lang == 'ar' else "⚠️ You have reached the limit of your free trial requests.\nPlease subscribe to continue using the bot."
             send_telegram_message(chat_id, msg_out)
             send_subscription_info(chat_id, lang)
             return "OK", 200
 
-        # خصم محاولة وتحديث قاعدة البيانات فوراً
         if not is_vip:
             new_trials = trials - 1
             update_user_trials(user_id, new_trials)
 
-        photo = message["photo"][-1] # أكبر حجم للصورة
+        photo = message["photo"][-1]
         threading.Thread(target=process_photo_async, args=(chat_id, user_id, photo['file_id'], lang)).start()
         return "OK", 200
 
-    # --- معالجة النصوص والأوامر ---
+    # معالجة النصوص والأوامر
     if "text" in message:
         text = message["text"].strip()
 
@@ -284,8 +277,6 @@ def webhook():
             confirm_msg = "تم تغيير اللغة إلى العربية 🇸🇦" if new_lang == 'ar' else "Language changed to English 🇬🇧"
             send_telegram_message(chat_id, confirm_msg, reply_markup=get_main_keyboard(new_lang))
 
-        # --- لوحة التحكم الخاصة بك كآدمين لتفعيل الاشتراكات ---
-        # استخدام الأمر: /vip USER_ID (مثال: /vip 12345678)
         elif text.startswith("/vip") and str(user_id) == str(ADMIN_ID):
             parts = text.split()
             if len(parts) > 1:
@@ -294,7 +285,7 @@ def webhook():
                     conn.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (target_user_id,))
                     conn.commit()
                 send_telegram_message(chat_id, f"✅ تم تفعيل الاشتراك VIP للمستخدم `{target_user_id}` بنجاح!")
-                send_telegram_message(target_user_id, "🎉 **مبروك! تم تفعيل اشتراكك الـ VIP بنجاح. يمكنك الآن تحليل عدد لا محدود من الشارتات!**")
+                send_telegram_message(target_user_id, "🎉 **مبروك! تم تفعيل اشتراكك الـ VIP بنجاح.**")
 
     return "OK", 200
 
