@@ -8,7 +8,7 @@ from flask import Flask
 from threading import Thread
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
@@ -23,15 +23,15 @@ def run_flask():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "أهلاً بك في TradeGuard AI 📈\nأرسل لي أي صورة لشارت وسأقوم بتحليلها فوراً عبر Groq!")
+    bot.reply_to(message, "أهلاً بك في TradeGuard AI 📈\nأرسل لي أي صورة لشارت وسأقوم بتحليلها فوراً عبر الذكاء الاصطناعي!")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل عبر Groq...')
+    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل عبر Gemini...')
     
     try:
-        if not GROQ_API_KEY:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: متغير GROQ_API_KEY غير معرف في Render.")
+        if not GEMINI_API_KEY:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: متغير GEMINI_API_KEY غير معرف في Render.")
             return
 
         # 1. جلب الصورة وتحويلها إلى Base64
@@ -39,14 +39,8 @@ def handle_photo(message):
         file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
         image_response = requests.get(file_url)
         base64_image = base64.b64encode(image_response.content).decode('utf-8')
-        data_url = f"data:image/jpeg;base64,{base64_image}"
 
-        # 2. إعداد الطلب لـ Groq
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
-            "Content-Type": "application/json"
-        }
-        
+        # 2. إعداد الطلب لـ Gemini API
         prompt = """أنت محلل أسواق مالية صارم TradeGuard AI.
 القاعدة الأولى: إذا لم تكن الصورة تحتوي على شموع يابانية وأسعار، توقف فوراً ورد بهذا النص فقط: "(Candlesticks) ⚠️ عذراً، هذه الصورة لا تطابق أي رسم بياني للشمعات اليابانية. يرجى إرسال شارت صحيح."
 القاعدة الثانية: إذا كانت صورة شارت صحيح، استخرج التوصية بسرعة فائقة في 4 نقاط قصيرة ومباشرة فقط:
@@ -56,49 +50,34 @@ def handle_photo(message):
 - نصيحة سريعة: (جملة واحدة فقط)
 لا تكتب أي مقدمات أو خاتمات."""
 
-        # قائمة النماذج المتاحة للرؤية في Groq
-        models_to_try = [
-            "llama-3.2-90b-vision-preview",
-            "llama-3.2-11b-vision-preview"
-        ]
-
-        last_error_msg = ""
-        success = False
-
-        for model in models_to_try:
-            payload = {
-                "model": model,
-                "messages": [
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY.strip()}"
+        
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
                     {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": data_url}}
-                        ]
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": base64_image
+                        }
                     }
-                ],
-                "max_tokens": 400
-            }
+                ]
+            }]
+        }
 
-            try:
-                groq_response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=30)
-                if groq_response.status_code == 200:
-                    result_text = groq_response.json()['choices'][0]['message']['content']
-                    bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=result_text)
-                    success = True
-                    break
-                else:
-                    err_json = groq_response.json() if groq_response.headers.get('content-type') == 'application/json' else {}
-                    err_detail = err_json.get('error', {}).get('message', groq_response.text)
-                    last_error_msg = f"رمز {groq_response.status_code} ({model}): {err_detail}"
-            except Exception as req_err:
-                last_error_msg = f"فشل الاتصال: {str(req_err)}"
-
-        if not success:
+        response = requests.post(url, json=payload, timeout=30)
+        
+        if response.status_code == 200:
+            result_json = response.json()
+            result_text = result_json['candidates'][0]['content']['parts'][0]['text']
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=result_text)
+        else:
+            err_msg = response.text
             bot.edit_message_text(
                 chat_id=message.chat.id, 
                 message_id=status_msg.message_id, 
-                text=f"❌ خطأ من Groq:\n{last_error_msg}"
+                text=f"❌ خطأ من الخادم (رمز {response.status_code}):\n{err_msg}"
             )
 
     except Exception as e:
@@ -107,19 +86,18 @@ def handle_photo(message):
 if __name__ == "__main__":
     Thread(target=run_flask).start()
     
-    # تنظيف الـ Webhook وإسقاط التحديثات المعلقة لتجنب تعارض 409
+    # تفادي تعارض 409 Conflict
     try:
         bot.remove_webhook(drop_pending_updates=True)
-        time.sleep(2)
-    except Exception as e:
-        print(f"Webhook cleanup note: {e}")
+        time.sleep=2
+    except Exception:
+        pass
 
     while True:
         try:
             bot.polling(none_stop=True, interval=1, timeout=20)
         except ApiTelegramException as e:
             if e.error_code == 409:
-                print("409 Conflict detected. Retrying in 5 seconds...")
                 time.sleep(5)
             else:
                 time.sleep(3)
