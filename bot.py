@@ -22,20 +22,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 2. قراءة متغيرات البيئة من Render
-TOKEN = (os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or "").strip()
-WEBHOOK_URL = (os.environ.get("WEBHOOK_URL") or "").strip().rstrip("/")
-PORT = int(os.environ.get("PORT", "10000"))
-GEMINI_API_KEY = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API") or "").strip()
+# 2. جلب وتنظيف المتغيرات البيئية
+TOKEN = (
+    os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or ""
+).strip().strip('"').strip("'")
 
-# تهيئة مكتبة Gemini بالمفتاح (سواء كان AIzaSy أو AQ...)
+RAW_WEBHOOK_URL = (
+    os.environ.get("WEBHOOK_URL") or ""
+).strip().strip('"').strip("'").rstrip("/")
+
+# تنقية وإصلاح رابط الـ Webhook تلقائياً
+WEBHOOK_URL = ""
+if RAW_WEBHOOK_URL:
+    if not RAW_WEBHOOK_URL.startswith("http://") and not RAW_WEBHOOK_URL.startswith("https://"):
+        WEBHOOK_URL = f"https://{RAW_WEBHOOK_URL}"
+    else:
+        WEBHOOK_URL = RAW_WEBHOOK_URL
+
+PORT = int(os.environ.get("PORT", "10000"))
+GEMINI_API_KEY = (
+    os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API") or ""
+).strip().strip('"').strip("'")
+
+# تهيئة Gemini SDK
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # تهيئة تطبيق تليجرام
 ptb_app = Application.builder().token(TOKEN).build() if TOKEN else None
 
-# 3. إدارة دورة حياة خادم FastAPI (Lifespan)
+# 3. إدارة دورة حياة FastAPI المحمية من الكراش
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if ptb_app:
@@ -45,10 +61,14 @@ async def lifespan(app: FastAPI):
 
         if WEBHOOK_URL and TOKEN:
             full_webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
-            logger.info(f"🔗 ربط Webhook على الرابط: {full_webhook_url}")
-            await ptb_app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
+            logger.info(f"🔗 محاولة ربط Webhook على: {full_webhook_url}")
+            try:
+                success = await ptb_app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
+                logger.info(f"✅ تم ضبط الـ Webhook بنجاح: {success}")
+            except Exception as e:
+                logger.error(f"⚠️ تعذر ضبط الـ Webhook: {e}. يرجى التحقق من صحة WEBHOOK_URL في Render!")
         else:
-            logger.warning("⚠️ يرجى التأكد من ضبط WEBHOOK_URL و TELEGRAM_BOT_TOKEN في Render!")
+            logger.warning("⚠️ يرجى التأكد من ضبط المتغيرات WEBHOOK_URL و TELEGRAM_BOT_TOKEN!")
 
     yield
 
@@ -59,7 +79,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# 4. دوال معالجة أوامر تليجرام
+# 4. دوال التعامل مع الأوامر والرسائل
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["👤 حسابي", "💎 الاشتراك"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -109,7 +129,6 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
 • **النصيحة والتوصية**: [جملة واحدة فقط توضح القرار المناسب]
 ━━━━━━━━━━━━━━━━━━"""
 
-    # --- المحاولة الأولى: باستخدام SDK الرسمي (يتعامل تلقائياً مع مفاتيح AQ...) ---
     models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
     image_part = {"mime_type": "image/jpeg", "data": image_bytes}
 
@@ -122,7 +141,7 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
         except Exception as e:
             logger.warning(f"SDK model {model_name} failed: {e}")
 
-    # --- المحاولة الثانية (احتياطية): استخدام HTTP REST مع إرسال x-goog-api-key Header ---
+    # fallback عبر HTTP المباشر مع الهيدر الصحيح
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     payload = {
         "contents": [{
@@ -133,7 +152,6 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
         }]
     }
 
-    # تخصيص הـ Headers لتمرير المفاتيح بصيغة AQ...
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": GEMINI_API_KEY
@@ -142,7 +160,6 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
     rest_endpoints = [
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
     ]
 
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -163,7 +180,6 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
 async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         processing_msg = await update.message.reply_text("⏳ جاري فحص وتحليل الشارت بواسطة الذكاء الاصطناعي...")
-        
         photo_file = await update.message.photo[-1].get_file()
         image_bytes = await photo_file.download_as_bytearray()
         
@@ -177,14 +193,14 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"Error handling image: {e}", exc_info=True)
         await update.message.reply_text("❌ حدث خطأ أثناء معالجة الصورة.")
 
-# تسجيل المعالجات
+# ربط الأوامر
 if ptb_app:
     ptb_app.add_handler(CommandHandler("start", start_command))
     ptb_app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
     ptb_app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
     ptb_app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
 
-# 5. نقاط نهاية السيرفر لـ Render Health Check
+# 5. مسارات Health Check و Webhook
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root_health_check():
     return {"status": "ok", "service": "TradeGuard AI"}
