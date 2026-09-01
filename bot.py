@@ -1,12 +1,16 @@
 import os
 import requests
 import base64
+import time
 import telebot
+from telebot.apihelper import ApiTelegramException
 from flask import Flask
 from threading import Thread
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
+# إمكانية تحديد اسم النموذج من متغيرات البيئة مع قيم افتراضية أحدث
+GROQ_MODEL = os.environ.get('GROQ_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct')
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
@@ -32,14 +36,14 @@ def handle_photo(message):
             bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: متغير GROQ_API_KEY غير معرف في Render.")
             return
 
-        # 1. جلب الصورة
+        # 1. جلب الصورة وتحويلها إلى Base64
         file_info = bot.get_file(message.photo[-1].file_id)
         file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
         image_response = requests.get(file_url)
         base64_image = base64.b64encode(image_response.content).decode('utf-8')
         data_url = f"data:image/jpeg;base64,{base64_image}"
 
-        # 2. إرسال الصورة إلى Groq
+        # 2. إعداد طلب Groq
         headers = {
             "Authorization": f"Bearer {GROQ_API_KEY.strip()}",
             "Content-Type": "application/json"
@@ -54,34 +58,42 @@ def handle_photo(message):
 - نصيحة سريعة: (جملة واحدة فقط)
 لا تكتب أي مقدمات أو خاتمات."""
 
-        payload = {
-            "model": "llama-3.2-11b-vision-preview",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}}
-                    ]
-                }
-            ],
-            "max_tokens": 400
-        }
-
-        groq_response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+        # قائمة النماذج المتاحة للرؤية على Groq للمحاولة
+        models_to_try = [GROQ_MODEL, "meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.2-90b-vision-preview"]
+        models_to_try = list(dict.fromkeys(models_to_try))  # إزالة التكرار
         
+        groq_response = None
+        for model in models_to_try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": data_url}}
+                        ]
+                    }
+                ],
+                "max_tokens": 400
+            }
+
+            groq_response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload)
+            if groq_response.status_code == 200:
+                break
+
         print(f"Groq Status Code: {groq_response.status_code}")
         print(f"Groq Response: {groq_response.text}")
 
-        if groq_response.status_code == 200:
+        if groq_response and groq_response.status_code == 200:
             result_text = groq_response.json()['choices'][0]['message']['content']
             bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=result_text)
         else:
-            error_details = groq_response.json().get('error', {}).get('message', groq_response.text)
+            error_details = groq_response.json().get('error', {}).get('message', groq_response.text) if groq_response else "No response"
             bot.edit_message_text(
                 chat_id=message.chat.id, 
                 message_id=status_msg.message_id, 
-                text=f"❌ خطأ من Groq (رمز {groq_response.status_code}):\n{error_details}"
+                text=f"❌ خطأ من Groq (رمز {groq_response.status_code if groq_response else 'N/A'}):\n{error_details}"
             )
 
     except Exception as e:
@@ -91,4 +103,18 @@ def handle_photo(message):
 if __name__ == "__main__":
     Thread(target=run_flask).start()
     bot.remove_webhook()
-    bot.polling(none_stop=True)
+    
+    # حلقة حماية تضمن إعادة الاتصال تلقائياً وتفادي خطأ 409 Conflict
+    while True:
+        try:
+            bot.polling(none_stop=True, interval=1, timeout=20)
+        except ApiTelegramException as e:
+            if e.error_code == 409:
+                print("Warning: Conflict 409 detected. Waiting for other instance to stop...")
+                time.sleep(5)
+            else:
+                print(f"Telegram API Exception: {e}")
+                time.sleep(3)
+        except Exception as e:
+            print(f"Unexpected error: {e}")
+            time.sleep(3)
