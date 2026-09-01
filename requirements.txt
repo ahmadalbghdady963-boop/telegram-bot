@@ -1,6 +1,2 @@
-pyTelegramBotAPI
-flask
+python-telegram-bot[job-queue]==21.4
 requests
-google-generativeai
-pillow
-pytz
