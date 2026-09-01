@@ -28,18 +28,15 @@ TOKEN = (
     os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or ""
 ).strip().strip('"').strip("'")
 
-# استخراج رابط المنصة تلقائياً بشكل مضمون 100% (لتجنب أخطاء النسخ واللصق)
+# استخراج رابط المنصة تلقائياً بشكل مضمون 100%
 def get_webhook_url():
-    # Render يوفر هذا المتغير تلقائياً، وهو مضمون وصحيح
     render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
     user_webhook = os.environ.get("WEBHOOK_URL", "").strip()
     
     domain = ""
-    # الأولوية دائماً لمتغير Render التلقائي لأنه دقيق 100%
     if render_host:
         domain = render_host
     elif user_webhook:
-        # إذا أدخل المستخدم الرابط يدوياً، ننظفه من أي أقواس أو مسافات أو نصوص زائدة
         match = re.search(r"([a-zA-Z0-9\-\.]+\.onrender\.com)", user_webhook)
         if match:
             domain = match.group(1)
@@ -142,7 +139,13 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
 • النصيحة والتوصية: [ النصيحة في جملة واحدة ]
 ━━━━━━━━━━━━━━━━━━"""
 
-    models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
+    # أسماء النماذج المحدثة والحديثة لضمان عدم حدوث خطأ 404
+    models_to_try = [
+        'gemini-2.5-flash',
+        'gemini-1.5-flash',
+        'gemini-2.5-pro',
+        'gemini-1.5-pro'
+    ]
     image_part = {"mime_type": "image/jpeg", "data": image_bytes}
 
     for model_name in models_to_try:
@@ -154,7 +157,7 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
         except Exception as e:
             logger.warning(f"SDK model {model_name} failed: {e}")
 
-    # محاولة بواسطة REST HTTP Direct Call
+    # محاولة بواسطة REST HTTP Direct Call مع النماذج المحدثة
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     payload = {
         "contents": [{
@@ -171,8 +174,8 @@ async def analyze_image_with_gemini(image_bytes: bytes) -> str:
     }
 
     rest_endpoints = [
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
         f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
     ]
 
     async with httpx.AsyncClient(timeout=60.0) as client:
