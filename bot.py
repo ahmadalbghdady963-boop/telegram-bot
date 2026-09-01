@@ -1,237 +1,256 @@
 import os
-import logging
-import base64
-import re
-from contextlib import asynccontextmanager
-import httpx
-import uvicorn
-from fastapi import FastAPI, Request, Response
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
+import time
+import requests
+import sqlite3
+import datetime
+import pytz
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from flask import Flask, request
 import google.generativeai as genai
+from io import BytesIO
+from PIL import Image
 
-# 1. إعداد نظام التسجيل (Logging)
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# === إعدادات النظام ===
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AQ.Ab8RN6KaUs0xXwn13AUPE3F2LS160HOaVTkVLfyIOU-NkbWhJw')
+RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
+ADMIN_ID = os.environ.get('ADMIN_ID', '0') # ضع رقمك في إعدادات ريندر
 
-# 2. تنقية متغيرات البيئة
-TOKEN = (
-    os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or ""
-).strip().strip('"').strip("'")
+# === تهيئة Gemini ===
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-3.6-flash')
 
-# استخراج رابط المنصة تلقائياً بشكل مضمون 100%
-def get_webhook_url():
-    render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
-    user_webhook = os.environ.get("WEBHOOK_URL", "").strip()
+# === تهيئة البوت والسيرفر ===
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
+app = Flask(__name__)
+
+# === قاعدة البيانات المحلية (SQLite) ===
+def init_db():
+    conn = sqlite3.connect('tradeguard.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY, lang TEXT, trials INTEGER, 
+                  is_sub INTEGER, start_date TEXT, end_date TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_user(user_id):
+    conn = sqlite3.connect('tradeguard.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user = c.fetchone()
+    if not user:
+        c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", (user_id, 'ar', 0, 0, '', ''))
+        conn.commit()
+        user = (user_id, 'ar', 0, 0, '', '')
+    conn.close()
+    return user
+
+def update_user(user_id, field, value):
+    conn = sqlite3.connect('tradeguard.db')
+    c = conn.cursor()
+    c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
+    conn.commit()
+    conn.close()
+
+# === نصوص اللغات ===
+TEXTS = {
+    'ar': {
+        'wait': '⏳ الرجاء الانتظار، جاري التحليل الفني الدقيق...',
+        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في الاستفادة من تحليلات TradeGuard الدقيقة، يرجى الاشتراك.',
+        'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المجانية: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
+        'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **اشتراك 10 أيام:** 20 دولار\n🔹 **اشتراك شهري:** 50 دولار\n\n📥 **طريقة الدفع (USDT - TON):**\nعنوان المحفظة:\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **للتفعيل:** أرسل صورة إشعار التحويل مع الـ ID الخاص بك (`{user_id}`) إلى الإدارة:\n@TradeGuard_Admin',
+        'active': 'فعال ✅ (ينتهي في {end})',
+        'inactive': 'غير فعال ❌',
+        'btn_acc': '👤 حسابي',
+        'btn_sub': '💎 الاشتراك',
+        'prompt': """أنت محلل أسواق مالية صارم TradeGuard AI.
+إذا لم تكن الصورة لشارت مالي، قل فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
+إذا كانت صحيحة، أعطني تحليلاً احترافياً مفصلاً جداً بدون أي مقدمات أو خاتمات، بالترتيب التالي:
+1. الاتجاه العام: (شرح دقيق لحالة السوق الحالية)
+2. أقوى المقاومات: (أرقام دقيقة مع ذكر السبب التقني)
+3. أقوى الدعوم: (أرقام دقيقة مع ذكر السبب التقني)
+4. نسبة حدوث التوقع: (أعطني نسبة مئوية % لنجاح الحركة المتوقعة بناءً على الشارت)
+5. الخلاصة والنصيحة: (قرار استثماري واضح ومباشر)."""
+    },
+    'en': {
+        'wait': '⏳ Please wait, performing accurate technical analysis...',
+        'no_trials': '⚠️ Sorry, your free trials have ended (3/3).\n\nTo continue using TradeGuard insights, please subscribe.',
+        'account': '👤 **Your Account**\n\n🆔 Your ID: `{user_id}`\n📊 Free Trials: {trials}/3\n💎 Subscription: {sub_status}',
+        'sub_info': '💎 **TradeGuard AI Subscriptions**\n\n🔹 **10 Days:** $20\n🔹 **1 Month:** $50\n\n📥 **Payment Method (USDT - TON):**\nWallet Address:\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **To Activate:** Send the payment receipt and your ID (`{user_id}`) to Admin:\n@TradeGuard_Admin',
+        'active': 'Active ✅ (Ends: {end})',
+        'inactive': 'Inactive ❌',
+        'btn_acc': '👤 My Account',
+        'btn_sub': '💎 Subscription',
+        'prompt': """You are a strict financial analyst, TradeGuard AI.
+If the image is not a financial chart, reply ONLY with: "⚠️ Sorry, this image is not a candlestick chart."
+If valid, provide a highly detailed professional analysis with NO intro/outro, in this exact format:
+1. Market Trend: (Detailed explanation of current state)
+2. Key Resistances: (Precise numbers with technical reasoning)
+3. Key Supports: (Precise numbers with technical reasoning)
+4. Probability of Success: (Provide a percentage % for the expected move based on the chart)
+5. Conclusion & Advice: (Clear, direct investment decision)."""
+    }
+}
+
+# === لوحات المفاتيح (القوائم) ===
+def get_main_keyboard(lang):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
+    return markup
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"), 
+               InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"))
+    bot.reply_to(message, "Welcome to TradeGuard AI 📈\nPlease choose your language / الرجاء اختيار لغتك:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
+def set_language(call):
+    lang = call.data.split('_')[1]
+    update_user(call.message.chat.id, 'lang', lang)
+    bot.delete_message(call.message.chat.id, call.message.message_id)
     
-    domain = ""
-    if render_host:
-        domain = render_host
-    elif user_webhook:
-        match = re.search(r"([a-zA-Z0-9\-\.]+\.onrender\.com)", user_webhook)
-        if match:
-            domain = match.group(1)
-        else:
-            domain = re.sub(r"^https?://", "", user_webhook)
-            domain = re.sub(r"[^a-zA-Z0-9\-\.]", "", domain)
-            
-    if domain:
-        return f"https://{domain}/webhook"
-    return ""
+    welcome_msg = "أهلاً بك في TradeGuard AI! أرسل أي صورة لشارت للتحليل." if lang == 'ar' else "Welcome to TradeGuard AI! Send any chart image for analysis."
+    bot.send_message(call.message.chat.id, welcome_msg, reply_markup=get_main_keyboard(lang))
 
-WEBHOOK_URL = get_webhook_url()
-
-PORT = int(os.environ.get("PORT", "10000"))
-GEMINI_API_KEY = (
-    os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API") or ""
-).strip().strip('"').strip("'")
-
-# تهيئة Gemini SDK
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
-# تهيئة تطبيق تليجرام
-ptb_app = Application.builder().token(TOKEN).build() if TOKEN else None
-
-# 3. إدارة دورة حياة FastAPI
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    if ptb_app:
-        logger.info("⚡ بدء تشغيل محرك TradeGuard AI...")
-        await ptb_app.initialize()
-        await ptb_app.start()
-
-        if WEBHOOK_URL and TOKEN:
-            logger.info(f"🔗 محاولة ربط Webhook على الرابط النهائي الدقيق: {WEBHOOK_URL}")
-            try:
-                success = await ptb_app.bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
-                logger.info(f"✅ تم ضبط الـ Webhook بنجاح: {success}")
-            except Exception as e:
-                logger.error(f"❌ تعذر ضبط الـ Webhook: {e}")
-        else:
-            logger.warning("⚠️ يرجى التأكد من ضبط TELEGRAM_BOT_TOKEN!")
-
-    yield
-
-    if ptb_app:
-        logger.info("🛑 إيقاف محرك تليجرام...")
-        await ptb_app.stop()
-        await ptb_app.shutdown()
-
-app = FastAPI(lifespan=lifespan)
-
-# 4. دوال التعامل مع الأوامر والرسائل
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["👤 حسابي", "💎 الاشتراك"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+@bot.message_handler(func=lambda message: message.text in [TEXTS['ar']['btn_acc'], TEXTS['en']['btn_acc'], '/my_account'])
+def account_info(message):
+    user = get_user(message.chat.id)
+    lang, trials, is_sub, _, end_date = user[1], user[2], user[3], user[4], user[5]
     
-    user_name = update.effective_user.first_name if update.effective_user else "المستخدم"
-    welcome_text = (
-        f"مرحباً بك {user_name} في TradeGuard AI! 🤖📈\n\n"
-        f"أنا نظام التحليل الفني الذكي المخصص لفحص الشموع اليابانية والأسواق المالية.\n\n"
-        f"📸 كيفية الاستخدام:\n"
-        f"أرسل صورة الرسم البياني (الشارت) مباشرة وسيقوم الذكاء الاصطناعي بتحليل الاتجاه والدعم والمقاومة فوراً!"
-    )
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    if is_sub:
+        sub_status = TEXTS[lang]['active'].format(end=end_date)
+    else:
+        sub_status = TEXTS[lang]['inactive']
+        
+    msg = TEXTS[lang]['account'].format(user_id=message.chat.id, trials=trials, sub_status=sub_status)
+    bot.reply_to(message, msg, parse_mode='Markdown')
 
-async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    account_info = (
-        "👤 تفاصيل حسابك:\n"
-        "━━━━━━━\n"
-        "• الحالة: نشط ⚡️\n"
-        "• نوع الاشتراك: الخطة المجانية\n"
-        "• رصيد التحليلات: غير محدود ♾️"
-    )
-    await update.message.reply_text(account_info)
+@bot.message_handler(func=lambda message: message.text in [TEXTS['ar']['btn_sub'], TEXTS['en']['btn_sub'], '/subscribe'])
+def sub_info(message):
+    user = get_user(message.chat.id)
+    lang = user[1]
+    msg = TEXTS[lang]['sub_info'].format(user_id=message.chat.id)
+    bot.reply_to(message, msg, parse_mode='Markdown')
 
-async def subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sub_info = (
-        "💎 خطط الاشتراك:\n"
-        "━━━━━━━\n"
-        "أنت حالياً تتمتع بالخطة المجانية الكاملة مقدمة من TradeGuard AI 🚀"
-    )
-    await update.message.reply_text(sub_info)
+# === لوحة تحكم الإدارة (تفعيل الاشتراكات) ===
+@bot.message_handler(commands=['activate'])
+def admin_activate(message):
+    if str(message.chat.id) != str(ADMIN_ID):
+        return # يتجاهل الأمر إذا لم يكن المدير
+    
+    try:
+        # Format: /activate <USER_ID> <DAYS>
+        parts = message.text.split()
+        target_user = int(parts[1])
+        days = int(parts[2])
+        
+        tz = pytz.timezone('Asia/Riyadh')
+        start_date = datetime.datetime.now(tz)
+        end_date = start_date + datetime.timedelta(days=days)
+        
+        start_str = start_date.strftime('%Y-%m-%d')
+        end_str = end_date.strftime('%Y-%m-%d')
+        
+        update_user(target_user, 'is_sub', 1)
+        update_user(target_user, 'start_date', start_str)
+        update_user(target_user, 'end_date', end_str)
+        
+        bot.reply_to(message, f"✅ تم تفعيل الاشتراك للمستخدم {target_user} بنجاح لمدة {days} يوم.")
+        
+        # إرسال إشعار للمشترك
+        t_user = get_user(target_user)
+        lang = t_user[1]
+        if lang == 'ar':
+            notif = f"🎉 **مبارك! تم تفعيل اشتراكك بنجاح**\n\n📅 يبدأ من: {start_str}\n⏳ ينتهي في: {end_str}\n\nيمكنك الآن إرسال الشارتات بحرية تامة 🚀"
+        else:
+            notif = f"🎉 **Subscription Activated!**\n\n📅 Starts: {start_str}\n⏳ Ends: {end_str}\n\nYou can now send charts freely 🚀"
+        bot.send_message(target_user, notif, parse_mode='Markdown')
+        
+    except Exception as e:
+        bot.reply_to(message, "❌ خطأ في الصيغة. استخدم:\n/activate <رقم_المستخدم> <عدد_الأيام>")
 
-async def analyze_image_with_gemini(image_bytes: bytes) -> str:
-    if not GEMINI_API_KEY:
-        return "❌ خطأ: لم يتم ضبط مفتاح GEMINI_API_KEY في متغيرات البيئة."
-
-    prompt = """أنت محلل أسواق مالية صارم وخبير للشموع اليابانية (TradeGuard AI).
-القاعدة الأولى: افحص الصورة أولاً. إذا لم تكن الصورة تحتوي على رسم بياني (شارت) لأسعار وشموع يابانية مالية، توقف فوراً وأجب فقط بالرسالة التالية:
-"⚠️ عذراً، هذه الصورة لا تحتوي على رسم بياني للشمعات اليابانية (Candlestick Chart)."
-
-القاعدة الثانية: إذا كانت الصورة شارت صحيح، استخرج التوصية واجعل القيمة المقابلة داخل أقواس مربعة [] بالشكل التالي:
-
-📊 تحليل TradeGuard AI
-━━━━━━━━━━━━━━━━━━
-• الاتجاه العام: [ صاعد / هابط / عرضي ]
-• مستوى المقاومة الأقوى: [ السعر ]
-• مستوى الدعم الأقوى: [ السعر ]
-• النصيحة والتوصية: [ النصيحة في جملة واحدة ]
-━━━━━━━━━━━━━━━━━━"""
-
-    # أسماء النماذج المحدثة والحديثة لضمان عدم حدوث خطأ 404
-    models_to_try = [
-        'gemini-2.5-flash',
-        'gemini-1.5-flash',
-        'gemini-2.5-pro',
-        'gemini-1.5-pro'
-    ]
-    image_part = {"mime_type": "image/jpeg", "data": image_bytes}
-
-    for model_name in models_to_try:
+# === معالجة الصور والتحليل ===
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    user = get_user(message.chat.id)
+    lang, trials, is_sub, end_date_str = user[1], user[2], user[3], user[5]
+    
+    # فحص الاشتراك وتاريخ الانتهاء
+    if is_sub:
+        tz = pytz.timezone('Asia/Riyadh')
         try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content([prompt, image_part])
-            if response and response.text:
-                return response.text.strip()
+            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').replace(tzinfo=tz)
+            if datetime.datetime.now(tz) > end_date:
+                update_user(message.chat.id, 'is_sub', 0) # انتهى الاشتراك
+                is_sub = 0
+        except:
+            pass
+
+    # منع الاستخدام إذا انتهت المحاولات ولم يكن مشتركاً
+    if not is_sub and trials >= 3:
+        bot.reply_to(message, TEXTS[lang]['no_trials'] + "\n\n" + TEXTS[lang]['sub_info'].format(user_id=message.chat.id), parse_mode='Markdown')
+        return
+
+    status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
+    
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
+        
+        image_response = requests.get(file_url, timeout=15)
+        if image_response.status_code != 200:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ Error downloading image.")
+            return
+            
+        img = Image.open(BytesIO(image_response.content))
+        prompt = TEXTS[lang]['prompt']
+
+        # استدعاء Gemini
+        response = model.generate_content([prompt, img])
+        
+        if response.text:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=response.text, parse_mode='Markdown')
+            # زيادة عدد المحاولات إذا لم يكن مشتركاً
+            if not is_sub:
+                update_user(message.chat.id, 'trials', trials + 1)
+        else:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ Error: Empty response.")
+
+    except Exception as e:
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=f"❌ Error occurred. Please try again.")
+        print(f"Internal Error: {e}")
+
+# === مسار الويب هوك الخاص بـ Render ===
+@app.route('/', methods=['GET'])
+def home():
+    return "TradeGuard AI V2.0 is live and running!"
+
+@app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        try:
+            json_string = request.get_data().decode('utf-8')
+            update = telebot.types.Update.de_json(json_string)
+            bot.process_new_updates([update])
         except Exception as e:
-            logger.warning(f"SDK model {model_name} failed: {e}")
-
-    # محاولة بواسطة REST HTTP Direct Call مع النماذج المحدثة
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": "image/jpeg", "data": base64_image}}
-            ]
-        }]
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY
-    }
-
-    rest_endpoints = [
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}",
-    ]
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        last_err = ""
-        for url in rest_endpoints:
-            try:
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data['candidates'][0]['content']['parts'][0]['text'].strip()
-                else:
-                    last_err = f"رمز الحالة ({resp.status_code})"
-            except Exception as ex:
-                last_err = str(ex)
-
-    return f"❌ تعذر الاتصال بمحرك التحليل. التفاصيل: {last_err}"
-
-async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        processing_msg = await update.message.reply_text("⏳ جاري فحص وتحليل الشارت بواسطة الذكاء الاصطناعي...")
-        
-        photo_file = await update.message.photo[-1].get_file()
-        image_bytes = await photo_file.download_as_bytearray()
-        
-        ai_response = await analyze_image_with_gemini(bytes(image_bytes))
-        
-        await processing_msg.edit_text(ai_response)
-    except Exception as e:
-        logger.error(f"Error handling image: {e}", exc_info=True)
-        await update.message.reply_text("❌ حدث خطأ أثناء معالجة الصورة.")
-
-# تسجيل المعالجات
-if ptb_app:
-    ptb_app.add_handler(CommandHandler("start", start_command))
-    ptb_app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
-    ptb_app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
-    ptb_app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
-
-# 5. مسارات FastAPI Health Check و Webhook
-@app.api_route("/", methods=["GET", "HEAD"])
-async def root_health_check():
-    return {"status": "ok", "service": "TradeGuard AI"}
-
-@app.post("/webhook")
-async def telegram_webhook(request: Request):
-    if not ptb_app:
-        return Response(status_code=500, content="Bot app not initialized")
-    
-    try:
-        data = await request.json()
-        update = Update.de_json(data, ptb_app.bot)
-        await ptb_app.process_update(update)
-    except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
-    
-    return Response(status_code=200)
+            print("Webhook Error:", e)
+        return "OK", 200
+    return "Forbidden", 403
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    bot.remove_webhook()
+    time.sleep(1) 
+    
+    if RENDER_URL:
+        clean_url = RENDER_URL.rstrip('/')
+        bot.set_webhook(url=f"{clean_url}/{TELEGRAM_TOKEN}")
+    
+    port = int(os.environ.get("PORT", 10000))
+    # Threaded=True مضافة داخل Flask لضمان عدم تعطل البوت تحت الضغط
+    app.run(host="0.0.0.0", port=port, threaded=True)
