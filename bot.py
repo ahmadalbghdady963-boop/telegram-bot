@@ -9,13 +9,14 @@ from PIL import Image
 
 # === إعدادات المتغيرات البيئية ===
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-# وضعت مفتاحك كاحتياط في حال نسيته في إعدادات Render
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AQ.Ab8RN6KaUs0xXwn13AUPE3F2LS160HOaVTkVLfyIOU-NkbWhJw')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL') 
 
 # === تهيئة Google Gemini ===
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+# 🛑 هنا كان السر! قمنا بتحديث اسم النموذج إلى الإصدار 2.5 المعتمد حالياً 🛑
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # === تهيئة البوت والسيرفر ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
@@ -23,14 +24,17 @@ app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI is running perfectly with Official Google SDK!"
+    return "TradeGuard AI is running perfectly with Gemini 2.5 Flash!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
+        try:
+            json_string = request.get_data().decode('utf-8')
+            update = telebot.types.Update.de_json(json_string)
+            bot.process_new_updates([update])
+        except Exception as e:
+            print("Webhook Error:", e)
         return "OK", 200
     return "Forbidden", 403
 
@@ -40,7 +44,7 @@ def send_welcome(message):
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل الفني...')
+    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل الفني عبر نموذج Gemini 2.5 Flash...')
     
     try:
         # 1. جلب الصورة من تيليجرام
@@ -52,7 +56,7 @@ def handle_photo(message):
             bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: لم أتمكن من تحميل الصورة من تيليجرام.")
             return
             
-        # فتح الصورة باستخدام مكتبة PIL (الصيغة المفضلة لمكتبة جوجل)
+        # فتح الصورة باستخدام مكتبة PIL
         img = Image.open(BytesIO(image_response.content))
 
         # 2. إعداد نص الأمر (Prompt)
@@ -65,7 +69,7 @@ def handle_photo(message):
 - نصيحة سريعة: (جملة واحدة فقط)
 لا تكتب أي مقدمات أو خاتمات."""
 
-        # 3. إرسال الصورة والنص إلى Gemini باستخدام الـ SDK الرسمي
+        # 3. إرسال الصورة والنص إلى Gemini
         response = model.generate_content([prompt, img])
         
         # 4. إرسال النتيجة للمستخدم
@@ -80,9 +84,8 @@ def handle_photo(message):
 # === تشغيل البوت وربط الويب هوك ===
 if __name__ == "__main__":
     bot.remove_webhook()
-    time.sleep(1) # لتفادي تعارض الويب هوك القديم
+    time.sleep(1) 
     
-    # تأكد من أن الرابط لا ينتهي بـ / (مثال: https://my-bot.onrender.com)
     if RENDER_URL:
         clean_url = RENDER_URL.rstrip('/')
         bot.set_webhook(url=f"{clean_url}/{TELEGRAM_TOKEN}")
