@@ -35,14 +35,14 @@ def handle_photo(message):
             bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: مفتاح GEMINI_API_KEY غير موجود في إعدادات Render.")
             return
 
-        # 1. جلب الصورة من تليجرام وتحويلها إلى Base64
+        # 1. جلب الصورة وتحويلها إلى Base64
         file_info = bot.get_file(message.photo[-1].file_id)
         file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
         image_response = requests.get(file_url)
         base64_image = base64.b64encode(image_response.content).decode('utf-8')
 
-        # 2. إعداد الطلب المباشر عبر الإصدار v1 من جوجل للنموذج المستقر
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY.strip()}"
+        # 2. الرابط الصحيح والمباشر تماماً بدون أي زوائد
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY.strip()}"
         
         prompt = """أنت محلل أسواق مالية صارم TradeGuard AI.
 القاعدة الأولى: إذا لم تكن الصورة تحتوي على شموع يابانية وأسعار، توقف فوراً ورد بهذا النص فقط: "(Candlesticks) ⚠️ عذراً، هذه الصورة لا تطابق أي رسم بياني للشمعات اليابانية."
