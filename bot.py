@@ -11,15 +11,21 @@ import google.generativeai as genai
 from io import BytesIO
 from PIL import Image
 
-# === إعدادات النظام ===
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AQ.Ab8RN6KaUs0xXwn13AUPE3F2LS160HOaVTkVLfyIOU-NkbWhJw')
+# === إعدادات النظام (مع دعم جميع الاحتمالات لأسماء المتغيرات في ريندر) ===
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRAM_TOKEN') or os.environ.get('BOT_TOKEN')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
-ADMIN_ID = os.environ.get('ADMIN_ID', '0') # ضع رقمك في إعدادات ريندر
+ADMIN_ID = os.environ.get('ADMIN_ID', '0')
+
+# التحقق من وجود التوكن لمنع انهيار السيرفر
+if not TELEGRAM_TOKEN:
+    raise ValueError("❌ خطأ حرج: متغير التوكن غير موجود أو تم تسميته بشكل خاطئ في Environment Variables بـ Render.")
 
 # === تهيئة Gemini ===
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-3.6-flash')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+# استخدام نموذج مستقر ومعتمد
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # === تهيئة البوت والسيرفر ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
@@ -142,10 +148,9 @@ def sub_info(message):
 @bot.message_handler(commands=['activate'])
 def admin_activate(message):
     if str(message.chat.id) != str(ADMIN_ID):
-        return # يتجاهل الأمر إذا لم يكن المدير
+        return 
     
     try:
-        # Format: /activate <USER_ID> <DAYS>
         parts = message.text.split()
         target_user = int(parts[1])
         days = int(parts[2])
@@ -163,7 +168,6 @@ def admin_activate(message):
         
         bot.reply_to(message, f"✅ تم تفعيل الاشتراك للمستخدم {target_user} بنجاح لمدة {days} يوم.")
         
-        # إرسال إشعار للمشترك
         t_user = get_user(target_user)
         lang = t_user[1]
         if lang == 'ar':
@@ -181,18 +185,16 @@ def handle_photo(message):
     user = get_user(message.chat.id)
     lang, trials, is_sub, end_date_str = user[1], user[2], user[3], user[5]
     
-    # فحص الاشتراك وتاريخ الانتهاء
     if is_sub:
         tz = pytz.timezone('Asia/Riyadh')
         try:
             end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').replace(tzinfo=tz)
             if datetime.datetime.now(tz) > end_date:
-                update_user(message.chat.id, 'is_sub', 0) # انتهى الاشتراك
+                update_user(message.chat.id, 'is_sub', 0)
                 is_sub = 0
         except:
             pass
 
-    # منع الاستخدام إذا انتهت المحاولات ولم يكن مشتركاً
     if not is_sub and trials >= 3:
         bot.reply_to(message, TEXTS[lang]['no_trials'] + "\n\n" + TEXTS[lang]['sub_info'].format(user_id=message.chat.id), parse_mode='Markdown')
         return
@@ -211,12 +213,10 @@ def handle_photo(message):
         img = Image.open(BytesIO(image_response.content))
         prompt = TEXTS[lang]['prompt']
 
-        # استدعاء Gemini
         response = model.generate_content([prompt, img])
         
         if response.text:
             bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=response.text, parse_mode='Markdown')
-            # زيادة عدد المحاولات إذا لم يكن مشتركاً
             if not is_sub:
                 update_user(message.chat.id, 'trials', trials + 1)
         else:
@@ -252,5 +252,4 @@ if __name__ == "__main__":
         bot.set_webhook(url=f"{clean_url}/{TELEGRAM_TOKEN}")
     
     port = int(os.environ.get("PORT", 10000))
-    # Threaded=True مضافة داخل Flask لضمان عدم تعطل البوت تحت الضغط
     app.run(host="0.0.0.0", port=port, threaded=True)
