@@ -1,26 +1,38 @@
 import os
+import time
 import requests
-import base64
 import telebot
 from flask import Flask, request
+import google.generativeai as genai
+from io import BytesIO
+from PIL import Image
 
+# === إعدادات المتغيرات البيئية ===
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
-RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
+# وضعت مفتاحك كاحتياط في حال نسيته في إعدادات Render
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AQ.Ab8RN6KaUs0xXwn13AUPE3F2LS160HOaVTkVLfyIOU-NkbWhJw')
+RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL') 
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+# === تهيئة Google Gemini ===
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
+
+# === تهيئة البوت والسيرفر ===
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI is running perfectly!"
+    return "TradeGuard AI is running perfectly with Official Google SDK!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return "OK", 200
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return "OK", 200
+    return "Forbidden", 403
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -31,19 +43,19 @@ def handle_photo(message):
     status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل الفني...')
     
     try:
-        if not GEMINI_API_KEY:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: مفتاح GEMINI_API_KEY غير موجود في إعدادات Render.")
-            return
-
-        # 1. جلب الصورة وتحويلها إلى Base64
+        # 1. جلب الصورة من تيليجرام
         file_info = bot.get_file(message.photo[-1].file_id)
         file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
-        image_response = requests.get(file_url)
-        base64_image = base64.b64encode(image_response.content).decode('utf-8')
-
-        # 2. الرابط الصحيح والمباشر تماماً بدون أي زوائد
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY.strip()}"
         
+        image_response = requests.get(file_url, timeout=15)
+        if image_response.status_code != 200:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: لم أتمكن من تحميل الصورة من تيليجرام.")
+            return
+            
+        # فتح الصورة باستخدام مكتبة PIL (الصيغة المفضلة لمكتبة جوجل)
+        img = Image.open(BytesIO(image_response.content))
+
+        # 2. إعداد نص الأمر (Prompt)
         prompt = """أنت محلل أسواق مالية صارم TradeGuard AI.
 القاعدة الأولى: إذا لم تكن الصورة تحتوي على شموع يابانية وأسعار، توقف فوراً ورد بهذا النص فقط: "(Candlesticks) ⚠️ عذراً، هذه الصورة لا تطابق أي رسم بياني للشمعات اليابانية."
 القاعدة الثانية: إذا كانت صورة شارت صحيح، استخرج التوصية بسرعة فائقة في 4 نقاط قصيرة ومباشرة فقط:
@@ -53,44 +65,27 @@ def handle_photo(message):
 - نصيحة سريعة: (جملة واحدة فقط)
 لا تكتب أي مقدمات أو خاتمات."""
 
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": base64_image
-                        }
-                    }
-                ]
-            }]
-        }
-
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        # 3. إرسال الصورة والنص إلى Gemini باستخدام الـ SDK الرسمي
+        response = model.generate_content([prompt, img])
         
-        if response.status_code == 200:
-            result_json = response.json()
-            try:
-                result_text = result_json['candidates'][0]['content']['parts'][0]['text']
-                bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=result_text)
-            except (KeyError, IndexError):
-                bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: استجابة غير صالحة من النموذج.")
+        # 4. إرسال النتيجة للمستخدم
+        if response.text:
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=response.text)
         else:
-            bot.edit_message_text(
-                chat_id=message.chat.id, 
-                message_id=status_msg.message_id, 
-                text=f"❌ خطأ من الخادم (رمز {response.status_code}):\n{response.text}"
-            )
+            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: استجابة فارغة من النموذج.")
 
     except Exception as e:
         bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=f"❌ حدث خطأ داخلي:\n{str(e)}")
 
+# === تشغيل البوت وربط الويب هوك ===
 if __name__ == "__main__":
     bot.remove_webhook()
-    if RENDER_URL:
-        bot.set_webhook(url=f"{RENDER_URL}/{TELEGRAM_TOKEN}")
+    time.sleep(1) # لتفادي تعارض الويب هوك القديم
     
-    port = int(os.environ.get("PORT", 8080))
+    # تأكد من أن الرابط لا ينتهي بـ / (مثال: https://my-bot.onrender.com)
+    if RENDER_URL:
+        clean_url = RENDER_URL.rstrip('/')
+        bot.set_webhook(url=f"{clean_url}/{TELEGRAM_TOKEN}")
+    
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
