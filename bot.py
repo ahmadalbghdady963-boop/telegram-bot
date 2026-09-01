@@ -29,7 +29,6 @@ if not TELEGRAM_TOKEN:
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# إعدادات الأمان
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -78,7 +77,7 @@ def update_user(user_id, field, value):
 # === نصوص اللغات ===
 TEXTS = {
     'ar': {
-        'wait': '⏳ جاري استدعاء المحرك المتاح وتحليل الشارت... برجاء الانتظار.',
+        'wait': '⏳ جاري تحليل الشارت بأعلى دقة... برجاء الانتظار.',
         'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في تحليل الشارتات، يرجى الاشتراك.',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
         'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **10 أيام:** 20 دولار\n🔹 **اشتراك شهري:** 50 دولار\n\n📥 **الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 أرسل إشعار التحويل والـ ID (`{user_id}`) للتفعيل:\n@TradeGuard_Admin',
@@ -96,7 +95,7 @@ TEXTS = {
 5. الخلاصة والنصيحة: (قرار استثماري واضح ومباشر)."""
     },
     'en': {
-        'wait': '⏳ Fetching available AI engine and analyzing chart... Please wait.',
+        'wait': '⏳ Performing technical analysis... Please wait.',
         'no_trials': '⚠️ Free trials ended (3/3). Please subscribe to continue.',
         'account': '👤 **Your Account**\n\n🆔 ID: `{user_id}`\n📊 Trials: {trials}/3\n💎 Subscription: {sub_status}',
         'sub_info': '💎 **Subscriptions**\n\n🔹 **10 Days:** $20\n🔹 **1 Month:** $50\n\n📥 **USDT - TON Wallet:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt and your ID (`{user_id}`) to:\n@TradeGuard_Admin',
@@ -119,6 +118,17 @@ def get_main_keyboard(lang):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
+
+# === دالة آمنة لإرسال وتعديل الرسائل لتفادي أخطاء تليجرام ===
+def safe_edit_message(chat_id, message_id, text):
+    try:
+        bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode='Markdown')
+    except telebot.apihelper.ApiTelegramException as e:
+        if "can't parse entities" in str(e).lower() or "400" in str(e):
+            # إرسال الرسالة كنص عادي في حال فشل التنسيق
+            bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode=None)
+        else:
+            raise e
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -167,24 +177,21 @@ def admin_activate(message):
     except Exception as e:
         bot.reply_to(message, "❌ خطأ في الصيغة. استخدم: /activate <رقم_المستخدم> <عدد_الأيام>")
 
-# === التعديل الجذري: استكشاف النماذج المتاحة ديناميكياً ===
+# === استكشاف النماذج المتاحة ديناميكياً ===
 def generate_chart_analysis(prompt, img):
-    # 1. جلب قائمة النماذج الفعالة الحقيقية لمفتاحك
     available_models = []
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
-        logger.info(f"Discovered models for your API Key: {available_models}")
+        logger.info(f"Discovered models for API Key: {available_models}")
     except Exception as e:
         logger.error(f"Error fetching models list: {e}")
-        # قائمة احتياطية في حال تعذر جلب القائمة
         available_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'gemini-1.5-flash']
 
     if not available_models:
         raise Exception("لم يتم العثور على أي نموذج داعم للتحليل في حسابك.")
 
-    # 2. تجربة النماذج المتاحة فعلياً بالترتيب
     last_exception = None
     for model_name in available_models:
         try:
@@ -231,7 +238,9 @@ def handle_photo(message):
         
         analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
         
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=analysis_result, parse_mode='Markdown')
+        # استخدام التعديل الآمن للرسالة
+        safe_edit_message(message.chat.id, status_msg.message_id, analysis_result)
+        
         if not is_sub:
             update_user(message.chat.id, 'trials', trials + 1)
 
@@ -239,12 +248,12 @@ def handle_photo(message):
         error_details = str(e)
         logger.error(f"Chart Analysis Error: {traceback.format_exc()}")
         msg = f"❌ تعذر استكمال التحليل.\nسبب الخطأ: `{error_details}`"
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=msg, parse_mode='Markdown')
+        safe_edit_message(message.chat.id, status_msg.message_id, msg)
 
 # === مسارات السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V6.0 (Auto-Discovery Engine) is running!"
+    return "TradeGuard AI V7.0 (Safe Formatting Engine) is running!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
