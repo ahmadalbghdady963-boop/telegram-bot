@@ -9,11 +9,10 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask, request
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from io import BytesIO
 from PIL import Image
 
-# === إعداد نظام المراقبة المتقدم ===
+# === إعداد نظام المراقبة ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -26,27 +25,23 @@ ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات Render.")
 
-# === تهيئة Gemini مع إلغاء قيود الأمان للتحليل المالي ===
+# === تهيئة مفتاح API الخاص بك ===
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-# إعدادات الأمان لمنع Gemini من حظر الشارتات المالية
-safety_settings = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-}
+# الاعتماد الحصري على محركات الجيل الثالث (3.x)
+AVAILABLE_MODELS = [
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5'
+]
 
 # === تهيئة البوت والسيرفر ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 app = Flask(__name__)
 
-# === قاعدة البيانات المحلية المحسنة ===
+# === قاعدة البيانات ===
 def get_db_connection():
-    # استخدام check_same_thread=False لمنع مشاكل Flask Threading
     return sqlite3.connect('tradeguard.db', check_same_thread=False, timeout=10)
 
 def init_db():
@@ -82,33 +77,40 @@ def update_user(user_id, field, value):
 # === نصوص اللغات ===
 TEXTS = {
     'ar': {
-        'wait': '⏳ جاري التحليل الفني العميق عبر الذكاء الاصطناعي... الرجاء الانتظار.',
-        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار، يرجى الاشتراك.',
+        'wait': '⏳ جاري تحليل الشارت عبر محرك Gemini 3... برجاء الانتظار.',
+        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في تحليل الشارتات، يرجى الاشتراك.',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
-        'sub_info': '💎 **الاشتراك في TradeGuard AI**\n\n🔹 **10 أيام:** 20 دولار\n🔹 **شهري:** 50 دولار\n\n📥 **الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل أرسل صورة التحويل والـ ID (`{user_id}`) للإدارة:\n@TradeGuard_Admin',
+        'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **10 أيام:** 20 دولار\n🔹 **اشتراك شهري:** 50 دولار\n\n📥 **الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 أرسل إشعار التحويل والـ ID (`{user_id}`) للتفعيل:\n@TradeGuard_Admin',
         'active': 'فعال ✅ (ينتهي: {end})',
         'inactive': 'غير فعال ❌',
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
-        'prompt': """أنت محلل أسواق مالية صارم TradeGuard AI.
+        'prompt': """أنت محلل أسواق مالية صارم ومحترف TradeGuard AI.
 إذا لم تكن الصورة لشارت مالي، قل فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
-إذا كانت صحيحة، أعطني تحليلاً احترافياً بدون أي مقدمات، بالترتيب التالي:
-1. الاتجاه العام: 
-2. أقوى المقاومات: 
-3. أقوى الدعوم: 
-4. نسبة نجاح التوقع: %
-5. الخلاصة والنصيحة: """
+إذا كانت صحيحة، أعطني تحليلاً احترافياً مفصلاً جداً بدون أي مقدمات أو خاتمات، بالترتيب التالي:
+1. الاتجاه العام: (شرح دقيق لحالة السوق الحالية)
+2. أقوى المقاومات: (أرقام دقيقة مع ذكر السبب التقني)
+3. أقوى الدعوم: (أرقام دقيقة مع ذكر السبب التقني)
+4. نسبة حدوث التوقع: (أعطني نسبة مئوية % لنجاح الحركة المتوقعة بناءً على الشارت)
+5. الخلاصة والنصيحة: (قرار استثماري واضح ومباشر)."""
     },
     'en': {
-        'wait': '⏳ Deep AI Technical Analysis in progress... Please wait.',
-        'no_trials': '⚠️ Free trials ended (3/3). Please subscribe.',
+        'wait': '⏳ Performing high-precision chart analysis with Gemini 3... Please wait.',
+        'no_trials': '⚠️ Free trials ended (3/3). Please subscribe to continue.',
         'account': '👤 **Your Account**\n\n🆔 ID: `{user_id}`\n📊 Trials: {trials}/3\n💎 Subscription: {sub_status}',
-        'sub_info': '💎 **Subscriptions**\n\n🔹 **10 Days:** $20\n🔹 **1 Month:** $50\n\n📥 **USDT - TON:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt and ID (`{user_id}`) to:\n@TradeGuard_Admin',
+        'sub_info': '💎 **Subscriptions**\n\n🔹 **10 Days:** $20\n🔹 **1 Month:** $50\n\n📥 **USDT - TON Wallet:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt and your ID (`{user_id}`) to:\n@TradeGuard_Admin',
         'active': 'Active ✅ (Ends: {end})',
         'inactive': 'Inactive ❌',
         'btn_acc': '👤 My Account',
         'btn_sub': '💎 Subscription',
-        'prompt': "Act as an expert financial analyst. Analyze the chart precisely. Trend, Resistances, Supports, Probability %, and final Advice."
+        'prompt': """You are a strict financial analyst, TradeGuard AI.
+If the image is not a financial chart, reply ONLY with: "⚠️ Sorry, this image is not a candlestick chart."
+If valid, provide a highly detailed professional analysis with NO intro/outro, in this exact format:
+1. Market Trend: (Detailed explanation of current state)
+2. Key Resistances: (Precise numbers with technical reasoning)
+3. Key Supports: (Precise numbers with technical reasoning)
+4. Probability of Success: (Provide a percentage % for the expected move based on the chart)
+5. Conclusion & Advice: (Clear, direct investment decision)."""
     }
 }
 
@@ -164,17 +166,31 @@ def admin_activate(message):
     except Exception as e:
         bot.reply_to(message, "❌ خطأ في الصيغة. استخدم: /activate <رقم_المستخدم> <عدد_الأيام>")
 
-# === المعالجة الجذرية للصور والتحليل ===
+# === استدعاء النماذج وتوليد التحليل ===
+def generate_chart_analysis(prompt, img):
+    last_exception = None
+    for model_name in AVAILABLE_MODELS:
+        try:
+            logger.info(f"Attempting analysis with model: {model_name}")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content([prompt, img])
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            logger.warning(f"Model {model_name} returned error: {e}")
+            last_exception = e
+            continue
+    raise last_exception or Exception("جميع محركات Gemini 3 غير متاحة حالياً.")
+
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ مفتاح Gemini API غير متوفر في إعدادات السيرفر.")
+        bot.reply_to(message, "❌ مفتاح GEMINI_API_KEY غير متوفر في متغيرات البيئة.")
         return
 
     user = get_user(message.chat.id)
     lang, trials, is_sub, end_date_str = user[1], user[2], user[3], user[5]
     
-    # فحص انتهاء الاشتراك
     if is_sub:
         tz = pytz.timezone('Asia/Riyadh')
         try:
@@ -191,43 +207,26 @@ def handle_photo(message):
     status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
     
     try:
-        # 1. التحميل الآمن باستخدام مكتبة تليجرام نفسها
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         img = Image.open(BytesIO(downloaded_file))
         
-        # 2. إرسال الطلب لـ Gemini مع تجاوز إعدادات الأمان
-        response = model.generate_content(
-            [TEXTS[lang]['prompt'], img],
-            safety_settings=safety_settings
-        )
+        analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
         
-        # 3. الرد والتحديث
-        if response.text:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=response.text, parse_mode='Markdown')
-            if not is_sub:
-                update_user(message.chat.id, 'trials', trials + 1)
-        else:
-            raise ValueError("الرد من Gemini جاء فارغاً.")
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=analysis_result, parse_mode='Markdown')
+        if not is_sub:
+            update_user(message.chat.id, 'trials', trials + 1)
 
     except Exception as e:
-        # نظام كشف الأخطاء الدقيق
         error_details = str(e)
         logger.error(f"Chart Analysis Error: {traceback.format_exc()}")
-        
-        if "API_KEY_INVALID" in error_details or "API key" in error_details:
-            msg = "❌ خطأ: مفتاح Gemini API الخاص بك غير صحيح. يرجى التأكد منه في Render."
-        elif "quota" in error_details.lower():
-            msg = "❌ خطأ: لقد استنفدت رصيد طلبات مفتاح Gemini الخاص بك."
-        else:
-            msg = f"❌ تعذر الاتصال بمحرك التحليل.\nالسبب التقني للإدارة: `{error_details}`"
-            
+        msg = f"❌ تعذر استكمال التحليل عبر محرك Gemini 3.\nالسبب: `{error_details}`"
         bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=msg, parse_mode='Markdown')
 
-# === مسار الويب هوك ===
+# === مسارات السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V3.0 is live and running flawlessly!"
+    return "TradeGuard AI V5.0 (Gemini 3 Driven) is active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
