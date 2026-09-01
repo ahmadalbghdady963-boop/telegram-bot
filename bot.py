@@ -15,8 +15,8 @@ RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 # === تهيئة Google Gemini ===
 genai.configure(api_key=GEMINI_API_KEY)
 
-# 🛑 هنا كان السر! قمنا بتحديث اسم النموذج إلى الإصدار 2.5 المعتمد حالياً 🛑
-model = genai.GenerativeModel('gemini-2.5-flash')
+# 🏆 التعديل الأخير: استخدام أحدث نموذج متوفر حالياً بناءً على طلب سيرفر جوجل 🏆
+model = genai.GenerativeModel('gemini-3.6-flash')
 
 # === تهيئة البوت والسيرفر ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
@@ -24,7 +24,7 @@ app = Flask(__name__)
 
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI is running perfectly with Gemini 2.5 Flash!"
+    return "TradeGuard AI is running perfectly with Gemini 3.6 Flash!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -44,7 +44,7 @@ def send_welcome(message):
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل الفني عبر نموذج Gemini 2.5 Flash...')
+    status_msg = bot.reply_to(message, '⏳ جاري الفحص والتحليل الفني عبر نموذج Gemini 3.6 Flash...')
     
     try:
         # 1. جلب الصورة من تيليجرام
