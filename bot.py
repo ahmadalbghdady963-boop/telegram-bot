@@ -3,6 +3,8 @@ import logging
 import base64
 import asyncio
 import httpx
+from fastapi import FastAPI, Request, Response
+import uvicorn
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -12,20 +14,25 @@ from telegram.ext import (
     ContextTypes
 )
 
-# 1. إعداد نظام التسجيل (Logging)
+# --- 1. الإعدادات والتهيئة ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-# 2. جلب المتغيرات مع دعم اسم المتغير الموجود في Render (TELEGRAM_BOT_TOKEN)
+# جلب المتغيرات
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
 PORT = int(os.environ.get("PORT", "10000"))
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-# 3. الأوامر الأساسية للبوت
+# تهيئة تطبيق FastAPI وخادم Telegram
+app = FastAPI()
+ptb_app = Application.builder().token(TOKEN).build()
+
+# --- 2. دوال معالجة أوامر تليجرام ---
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.message.from_user.first_name if update.message.from_user else "المستخدم"
     welcome_text = (
@@ -41,7 +48,6 @@ async def account_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("💎 **خطط الاشتراك**:\nأنت حالياً تستخدم الخطة المجانية. الخطط المتقدمة ستتوفر قريباً!")
 
-# 4. دالة التحليل المالي عبر Gemini API
 async def analyze_image_with_gemini(base64_image: str) -> str:
     if not GEMINI_API_KEY:
         return "❌ خطأ: مفتاح GEMINI_API_KEY غير متوفر في متغيرات البيئة على Render."
@@ -64,12 +70,7 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
         "contents": [{
             "parts": [
                 {"text": prompt},
-                {
-                    "inline_data": {
-                        "mime_type": "image/jpeg",
-                        "data": base64_image
-                    }
-                }
+                {"inline_data": {"mime_type": "image/jpeg", "data": base64_image}}
             ]
         }]
     }
@@ -83,8 +84,7 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
             try:
                 response = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
                 if response.status_code == 200:
-                    res_json = response.json()
-                    return res_json['candidates'][0]['content']['parts'][0]['text']
+                    return response.json()['candidates'][0]['content']['parts'][0]['text']
                 else:
                     last_error = f"رمز ({response.status_code})"
             except Exception as e:
@@ -92,11 +92,9 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
 
     return f"❌ فشل الاتصال بخدمة التحليل الفني. التفاصيل: {last_error}"
 
-# 5. استلام الصور
 async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         processing_msg = await update.message.reply_text("⏳ جاري فحص وتحليل الشارت بواسطة الذكاء الاصطناعي...")
-        
         photo_file = await update.message.photo[-1].get_file()
         image_bytes = await photo_file.download_as_bytearray()
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
@@ -107,39 +105,63 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await processing_msg.edit_text(ai_response, parse_mode="Markdown")
         except Exception:
             await processing_msg.edit_text(ai_response)
-
     except Exception as e:
         logger.error(f"Error analyzing chart: {e}", exc_info=True)
-        await update.message.reply_text(f"❌ حدث خطأ أثناء معالجة الصورة: {str(e)}")
+        await update.message.reply_text("❌ حدث خطأ أثناء معالجة الصورة.")
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+# --- 3. تسجيل الأوامر في التطبيق ---
+ptb_app.add_handler(CommandHandler("start", start_command))
+ptb_app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
+ptb_app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
+ptb_app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
 
-# 6. تشغيل البوت
-def main():
-    if not TOKEN or not WEBHOOK_URL:
-        logger.error("❌ المتغيرات البيئية TELEGRAM_BOT_TOKEN أو WEBHOOK_URL مفقودة!")
-        return
+# --- 4. إعدادات FastAPI للـ Webhook ---
 
-    clean_webhook = WEBHOOK_URL.rstrip('/')
+@app.post(f"/{TOKEN}")
+async def telegram_webhook(request: Request):
+    """استقبال التحديثات من تليجرام عبر المسار المؤمن بالتوكن"""
+    try:
+        data = await request.json()
+        update = Update.de_json(data, ptb_app.bot)
+        
+        # التأكد من تهيئة وتشغيل تطبيق تليجرام
+        if not ptb_app._initialized:
+            await ptb_app.initialize()
+            await ptb_app.start()
 
-    app = Application.builder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
-    app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
-    app.add_error_handler(error_handler)
-
-    logger.info("🚀 جاري بدء تشغيل البوت...")
+        await ptb_app.process_update(update)
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}", exc_info=True)
     
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=f"{clean_webhook}/{TOKEN}",
-        drop_pending_updates=True
-    )
+    return Response(status_code=200)
 
-if __name__ == '__main__':
-    main()
+@app.get("/")
+def health_check():
+    """مسار صحة الخادم للتأكد من عمله على Render"""
+    return {"status": "TradeGuard AI Bot is Running!"}
+
+@app.on_event("startup")
+async def on_startup():
+    """عند بدء تشغيل الخادم، قم بتسجيل الـ Webhook مع تليجرام"""
+    if TOKEN and WEBHOOK_URL:
+        webhook_path = f"{WEBHOOK_URL}/{TOKEN}"
+        await ptb_app.bot.set_webhook(url=webhook_path, drop_pending_updates=True)
+        logger.info(f"✅ Webhook is set to: {webhook_path}")
+    else:
+        logger.error("❌ TOKEN or WEBHOOK_URL is missing!")
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    """عند إيقاف الخادم"""
+    if ptb_app._initialized:
+        await ptb_app.stop()
+        await ptb_app.shutdown()
+
+# --- 5. نقطة الدخول الرئيسية ---
+if __name__ == "__main__":
+    if not TOKEN:
+        logger.error("❌ TELEGRAM_BOT_TOKEN is missing!")
+    else:
+        # تشغيل خادم Uvicorn الذي سيحتضن FastAPI و Telegram معاً
+        logger.info(f"🚀 Starting Uvicorn server on port {PORT}...")
+        uvicorn.run(app, host="0.0.0.0", port=PORT)
