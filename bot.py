@@ -1,7 +1,8 @@
 import os
+import requests
+import base64
 import telebot
 from flask import Flask, request
-import google.generativeai as genai
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
@@ -10,15 +11,9 @@ RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 app = Flask(__name__)
 
-# تهيئة مفتاح جوجل
-genai.configure(api_key=GEMINI_API_KEY)
-
-# الحل الحاسم: استخدام الصيغة الكاملة والمدعومة رسمياً للموديل لتجاوز خطأ 404
-model = genai.GenerativeModel('models/gemini-1.5-flash')
-
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI is running and ready!"
+    return "TradeGuard AI is running perfectly!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -40,15 +35,15 @@ def handle_photo(message):
             bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: مفتاح GEMINI_API_KEY غير موجود في إعدادات Render.")
             return
 
-        # تحميل الصورة من تليجرام
+        # 1. جلب الصورة من تليجرام وتحويلها إلى Base64
         file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
+        image_response = requests.get(file_url)
+        base64_image = base64.b64encode(image_response.content).decode('utf-8')
 
-        image_part = {
-            "mime_type": "image/jpeg",
-            "data": downloaded_file
-        }
-
+        # 2. إعداد الطلب المباشر عبر الإصدار v1 من جوجل للنموذج المستقر
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY.strip()}"
+        
         prompt = """أنت محلل أسواق مالية صارم TradeGuard AI.
 القاعدة الأولى: إذا لم تكن الصورة تحتوي على شموع يابانية وأسعار، توقف فوراً ورد بهذا النص فقط: "(Candlesticks) ⚠️ عذراً، هذه الصورة لا تطابق أي رسم بياني للشمعات اليابانية."
 القاعدة الثانية: إذا كانت صورة شارت صحيح، استخرج التوصية بسرعة فائقة في 4 نقاط قصيرة ومباشرة فقط:
@@ -58,13 +53,39 @@ def handle_photo(message):
 - نصيحة سريعة: (جملة واحدة فقط)
 لا تكتب أي مقدمات أو خاتمات."""
 
-        # إرسال الطلب
-        response = model.generate_content([prompt, image_part])
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": base64_image
+                        }
+                    }
+                ]
+            }]
+        }
+
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=response.text)
+        if response.status_code == 200:
+            result_json = response.json()
+            try:
+                result_text = result_json['candidates'][0]['content']['parts'][0]['text']
+                bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=result_text)
+            except (KeyError, IndexError):
+                bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ: استجابة غير صالحة من النموذج.")
+        else:
+            bot.edit_message_text(
+                chat_id=message.chat.id, 
+                message_id=status_msg.message_id, 
+                text=f"❌ خطأ من الخادم (رمز {response.status_code}):\n{response.text}"
+            )
 
     except Exception as e:
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=f"❌ حدث خطأ أثناء المعالجة:\n{str(e)}")
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=f"❌ حدث خطأ داخلي:\n{str(e)}")
 
 if __name__ == "__main__":
     bot.remove_webhook()
