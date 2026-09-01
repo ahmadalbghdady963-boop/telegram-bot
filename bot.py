@@ -9,6 +9,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask, request
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from io import BytesIO
 from PIL import Image
 
@@ -25,16 +26,16 @@ ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات Render.")
 
-# === تهيئة مفتاح API الخاص بك ===
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# الاعتماد الحصري على محركات الجيل الثالث (3.x)
-AVAILABLE_MODELS = [
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
-    'gemini-3.5'
-]
+# إعدادات الأمان
+safety_settings = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
 
 # === تهيئة البوت والسيرفر ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
@@ -77,7 +78,7 @@ def update_user(user_id, field, value):
 # === نصوص اللغات ===
 TEXTS = {
     'ar': {
-        'wait': '⏳ جاري تحليل الشارت عبر محرك Gemini 3... برجاء الانتظار.',
+        'wait': '⏳ جاري استدعاء المحرك المتاح وتحليل الشارت... برجاء الانتظار.',
         'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في تحليل الشارتات، يرجى الاشتراك.',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
         'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **10 أيام:** 20 دولار\n🔹 **اشتراك شهري:** 50 دولار\n\n📥 **الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 أرسل إشعار التحويل والـ ID (`{user_id}`) للتفعيل:\n@TradeGuard_Admin',
@@ -95,7 +96,7 @@ TEXTS = {
 5. الخلاصة والنصيحة: (قرار استثماري واضح ومباشر)."""
     },
     'en': {
-        'wait': '⏳ Performing high-precision chart analysis with Gemini 3... Please wait.',
+        'wait': '⏳ Fetching available AI engine and analyzing chart... Please wait.',
         'no_trials': '⚠️ Free trials ended (3/3). Please subscribe to continue.',
         'account': '👤 **Your Account**\n\n🆔 ID: `{user_id}`\n📊 Trials: {trials}/3\n💎 Subscription: {sub_status}',
         'sub_info': '💎 **Subscriptions**\n\n🔹 **10 Days:** $20\n🔹 **1 Month:** $50\n\n📥 **USDT - TON Wallet:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt and your ID (`{user_id}`) to:\n@TradeGuard_Admin',
@@ -166,26 +167,43 @@ def admin_activate(message):
     except Exception as e:
         bot.reply_to(message, "❌ خطأ في الصيغة. استخدم: /activate <رقم_المستخدم> <عدد_الأيام>")
 
-# === استدعاء النماذج وتوليد التحليل ===
+# === التعديل الجذري: استكشاف النماذج المتاحة ديناميكياً ===
 def generate_chart_analysis(prompt, img):
+    # 1. جلب قائمة النماذج الفعالة الحقيقية لمفتاحك
+    available_models = []
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        logger.info(f"Discovered models for your API Key: {available_models}")
+    except Exception as e:
+        logger.error(f"Error fetching models list: {e}")
+        # قائمة احتياطية في حال تعذر جلب القائمة
+        available_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'gemini-1.5-flash']
+
+    if not available_models:
+        raise Exception("لم يتم العثور على أي نموذج داعم للتحليل في حسابك.")
+
+    # 2. تجربة النماذج المتاحة فعلياً بالترتيب
     last_exception = None
-    for model_name in AVAILABLE_MODELS:
+    for model_name in available_models:
         try:
             logger.info(f"Attempting analysis with model: {model_name}")
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content([prompt, img])
+            response = model.generate_content([prompt, img], safety_settings=safety_settings)
             if response and response.text:
                 return response.text
         except Exception as e:
-            logger.warning(f"Model {model_name} returned error: {e}")
+            logger.warning(f"Model {model_name} failed: {e}")
             last_exception = e
             continue
-    raise last_exception or Exception("جميع محركات Gemini 3 غير متاحة حالياً.")
+
+    raise last_exception or Exception("تعذر الوصول لأي من المحركات المتاحة.")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ مفتاح GEMINI_API_KEY غير متوفر في متغيرات البيئة.")
+        bot.reply_to(message, "❌ مفتاح GEMINI_API_KEY غير مضاف في Render.")
         return
 
     user = get_user(message.chat.id)
@@ -220,13 +238,13 @@ def handle_photo(message):
     except Exception as e:
         error_details = str(e)
         logger.error(f"Chart Analysis Error: {traceback.format_exc()}")
-        msg = f"❌ تعذر استكمال التحليل عبر محرك Gemini 3.\nالسبب: `{error_details}`"
+        msg = f"❌ تعذر استكمال التحليل.\nسبب الخطأ: `{error_details}`"
         bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=msg, parse_mode='Markdown')
 
 # === مسارات السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V5.0 (Gemini 3 Driven) is active!"
+    return "TradeGuard AI V6.0 (Auto-Discovery Engine) is running!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
