@@ -26,9 +26,11 @@ ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات Render.")
 
+# تفعيل الـ API باستخدام مفتاحك الخاص (بدون اشتراطات على شكل المفتاح)
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+# إعدادات الأمان
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -74,7 +76,7 @@ def update_user(user_id, field, value):
     conn.commit()
     conn.close()
 
-# === نصوص اللغات ===
+# === نصوص اللغات (مع توجيه الذكاء الاصطناعي للاختصار قليلاً) ===
 TEXTS = {
     'ar': {
         'wait': '⏳ جاري تحليل الشارت بأعلى دقة... برجاء الانتظار.',
@@ -87,12 +89,12 @@ TEXTS = {
         'btn_sub': '💎 الاشتراك',
         'prompt': """أنت محلل أسواق مالية صارم ومحترف TradeGuard AI.
 إذا لم تكن الصورة لشارت مالي، قل فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
-إذا كانت صحيحة، أعطني تحليلاً احترافياً مفصلاً جداً بدون أي مقدمات أو خاتمات، بالترتيب التالي:
-1. الاتجاه العام: (شرح دقيق لحالة السوق الحالية)
-2. أقوى المقاومات: (أرقام دقيقة مع ذكر السبب التقني)
-3. أقوى الدعوم: (أرقام دقيقة مع ذكر السبب التقني)
-4. نسبة حدوث التوقع: (أعطني نسبة مئوية % لنجاح الحركة المتوقعة بناءً على الشارت)
-5. الخلاصة والنصيحة: (قرار استثماري واضح ومباشر)."""
+إذا كانت صحيحة، أعطني تحليلاً احترافياً دقيقاً ومباشراً بدون كلام زائد (بحد أقصى 350 كلمة)، بالترتيب التالي:
+1. الاتجاه العام: (مباشر)
+2. أقوى المقاومات: (أرقام دقيقة)
+3. أقوى الدعوم: (أرقام دقيقة)
+4. نسبة حدوث التوقع: (%)
+5. الخلاصة والنصيحة: (شراء أو بيع أو انتظار)."""
     },
     'en': {
         'wait': '⏳ Performing technical analysis... Please wait.',
@@ -105,12 +107,12 @@ TEXTS = {
         'btn_sub': '💎 Subscription',
         'prompt': """You are a strict financial analyst, TradeGuard AI.
 If the image is not a financial chart, reply ONLY with: "⚠️ Sorry, this image is not a candlestick chart."
-If valid, provide a highly detailed professional analysis with NO intro/outro, in this exact format:
-1. Market Trend: (Detailed explanation of current state)
-2. Key Resistances: (Precise numbers with technical reasoning)
-3. Key Supports: (Precise numbers with technical reasoning)
-4. Probability of Success: (Provide a percentage % for the expected move based on the chart)
-5. Conclusion & Advice: (Clear, direct investment decision)."""
+If valid, provide a highly detailed but concise professional analysis (max 350 words) with NO intro/outro, in this exact format:
+1. Market Trend: (Direct state)
+2. Key Resistances: (Precise numbers)
+3. Key Supports: (Precise numbers)
+4. Probability of Success: (%)
+5. Conclusion & Advice: (Clear decision)."""
     }
 }
 
@@ -119,16 +121,38 @@ def get_main_keyboard(lang):
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
 
-# === دالة آمنة لإرسال وتعديل الرسائل لتفادي أخطاء تليجرام ===
-def safe_edit_message(chat_id, message_id, text):
-    try:
-        bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode='Markdown')
-    except telebot.apihelper.ApiTelegramException as e:
-        if "can't parse entities" in str(e).lower() or "400" in str(e):
-            # إرسال الرسالة كنص عادي في حال فشل التنسيق
-            bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=text, parse_mode=None)
-        else:
-            raise e
+# =====================================================================
+# حل مشكلة الرسائل الطويلة (MESSAGE_TOO_LONG) وأخطاء التنسيق (Entities)
+# =====================================================================
+def safe_send_long_text(chat_id, status_message_id, full_text):
+    # الحد الأقصى لرسالة تليجرام هو 4096 حرف، سنقوم بتقسيمها إلى 4000 حرف لتكون آمنة.
+    chunk_size = 4000
+    chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
+    
+    for index, chunk in enumerate(chunks):
+        try:
+            if index == 0:
+                # الرسالة الأولى: نقوم بتعديل رسالة "الانتظار"
+                bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=chunk, parse_mode='Markdown')
+            else:
+                # إذا كانت الرسالة أطول من 4000 حرف، سيتم إرسال الباقي كرسائل جديدة متتالية
+                bot.send_message(chat_id=chat_id, text=chunk, parse_mode='Markdown')
+                
+        except telebot.apihelper.ApiTelegramException as e:
+            error_msg = str(e).lower()
+            # في حال وجود خطأ بتنسيق النجوم/الرموز في Markdown
+            if "can't parse entities" in error_msg or "400" in error_msg:
+                try:
+                    if index == 0:
+                        bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=chunk, parse_mode=None)
+                    else:
+                        bot.send_message(chat_id=chat_id, text=chunk, parse_mode=None)
+                except Exception as inner_e:
+                    logger.error(f"Fallback sending failed: {inner_e}")
+            else:
+                logger.error(f"Telegram Unknown Error: {e}")
+
+# =====================================================================
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -177,22 +201,25 @@ def admin_activate(message):
     except Exception as e:
         bot.reply_to(message, "❌ خطأ في الصيغة. استخدم: /activate <رقم_المستخدم> <عدد_الأيام>")
 
-# === استكشاف النماذج المتاحة ديناميكياً ===
+# === استكشاف النماذج المتاحة ديناميكياً باستخدام مفتاحك ===
 def generate_chart_analysis(prompt, img):
     available_models = []
     try:
+        # البحث عن النماذج المتاحة في حسابك والتي تدعم توليد المحتوى
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
-        logger.info(f"Discovered models for API Key: {available_models}")
+        logger.info(f"Discovered models for your API Key: {available_models}")
     except Exception as e:
         logger.error(f"Error fetching models list: {e}")
-        available_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'gemini-1.5-flash']
+        # قوائم احتياطية في أسوأ الحالات
+        available_models = ['models/gemini-1.5-flash', 'models/gemini-pro-vision']
 
     if not available_models:
-        raise Exception("لم يتم العثور على أي نموذج داعم للتحليل في حسابك.")
+        raise Exception("لم يتم العثور على أي نموذج داعم في مفتاح الـ API الخاص بك.")
 
     last_exception = None
+    # يجرب البوت النماذج المتاحة واحداً تلو الآخر حتى ينجح
     for model_name in available_models:
         try:
             logger.info(f"Attempting analysis with model: {model_name}")
@@ -205,12 +232,12 @@ def generate_chart_analysis(prompt, img):
             last_exception = e
             continue
 
-    raise last_exception or Exception("تعذر الوصول لأي من المحركات المتاحة.")
+    raise last_exception or Exception("تعذر الوصول لأي من محركات الذكاء الاصطناعي.")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ مفتاح GEMINI_API_KEY غير مضاف في Render.")
+        bot.reply_to(message, "❌ مفتاح GEMINI_API_KEY غير مضاف في السيرفر.")
         return
 
     user = get_user(message.chat.id)
@@ -236,10 +263,11 @@ def handle_photo(message):
         downloaded_file = bot.download_file(file_info.file_path)
         img = Image.open(BytesIO(downloaded_file))
         
+        # استدعاء التحليل
         analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
         
-        # استخدام التعديل الآمن للرسالة
-        safe_edit_message(message.chat.id, status_msg.message_id, analysis_result)
+        # إرسال التحليل عبر نظام "المقسّم الذكي" لتفادي أخطاء الرسائل الطويلة والتنسيق
+        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result)
         
         if not is_sub:
             update_user(message.chat.id, 'trials', trials + 1)
@@ -247,13 +275,13 @@ def handle_photo(message):
     except Exception as e:
         error_details = str(e)
         logger.error(f"Chart Analysis Error: {traceback.format_exc()}")
-        msg = f"❌ تعذر استكمال التحليل.\nسبب الخطأ: `{error_details}`"
-        safe_edit_message(message.chat.id, status_msg.message_id, msg)
+        msg = f"❌ تعذر استكمال التحليل.\nالسبب: `{error_details}`"
+        safe_send_long_text(message.chat.id, status_msg.message_id, msg)
 
 # === مسارات السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V7.0 (Safe Formatting Engine) is running!"
+    return "TradeGuard AI V8.0 (Anti-Long-Message & Auto-Discovery) is running!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
