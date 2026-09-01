@@ -3,3 +3,4 @@ flask
 requests
 google-generativeai
 pillow
+pytz
