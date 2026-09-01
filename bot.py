@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 2. قراءة المتغيرات البيئية (ندعم الاسمين لضمان عدم حدوث خطأ)
+# 2. قراءة المتغيرات البيئية
 TOKEN = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("BOT_TOKEN")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL") or os.environ.get("RENDER_EXTERNAL_URL", "https://telegram-bot-pqy3.onrender.com")
 PORT = int(os.environ.get("PORT", "10000"))
@@ -51,11 +51,18 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
-# 4. التشغيل الرئيسي
+# 4. التشغيل الرئيسي مع معالجة Event Loop
 def main():
     if not TOKEN:
         logger.error("❌ خطأ حرج: متغير TELEGRAM_TOKEN أو BOT_TOKEN غير موجود في إعدادات Render!")
         return
+
+    # إصلاح مشكلة حلقة الأحداث في بايثون الحديثة على Render
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
     app = Application.builder().token(TOKEN).build()
 
