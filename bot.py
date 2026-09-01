@@ -18,7 +18,7 @@ from PIL import Image
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# === إعدادات النظام وتغييرات البيئة ===
+# === إعدادات النظام ===
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRAM_TOKEN') or os.environ.get('BOT_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
@@ -30,7 +30,7 @@ if not TELEGRAM_TOKEN:
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# إعدادات الأمان الخاصة بالذكاء الاصطناعي
+# إعدادات الأمان
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -76,87 +76,87 @@ def update_user(user_id, field, value):
     conn.commit()
     conn.close()
 
-# === النصوص وقوالب اللغات ===
+# === نصوص وقوالب اللغات ===
 TEXTS = {
     'ar': {
-        'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي لتحليل الشارتات المالية والأسواق.\n\nالرجاء اختيار لغتك / Choose your language:",
-        'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي صورة شارت مالي للتحليل الآن.",
-        'wait': '⏳ جاري تحليل الشارت بدقة عالية... برجاء الانتظار.',
+        'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي لتحليل الشارتات المالية.\n\nالرجاء اختيار لغتك / Choose your language:",
+        'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي صورة لشارت مالي للتحليل الآن.",
+        'wait': '⏳ جاري تحليل الشارت بدقة فائقة... برجاء الانتظار.',
         'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في تحليل الشارتات، يرجى الاشتراك للحصول على وصول غير محدود.',
-        'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المجانية المستعلمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
-        'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n🔹 **اشتراك شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد تحويل المبلغ، أرسل صورة الإشعار و الـ ID الخاص بك (`{user_id}`) لإدارة البوت لتفعيل حسابك فوراً:\n@TradeGuard_Admin',
+        'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
+        'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n🔹 **اشتراك شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد التحويل، أرسل صورة الإشعار والـ ID الخاص بك (`{user_id}`) للتفعيل:\n@TradeGuard_Admin',
         'active': 'فعال ✅ (ينتهي في: {end})',
         'inactive': 'غير فعال ❌',
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
-        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك الآن فعال ولغاية تاريخ: `{end_date}`.\nيمكنك الآن إرسال عدد غير محدود من الشارتات للتحليل. نتمنى لك تداولاً موفقاً! 📈',
-        'prompt': """أنت نظام التحليل الفني الاحترافي الصارم TradeGuard AI.
-إذا لم تكن الصورة المرسلة عبارة عن شارت تداول مالي أو رسم بياني لشموع يابانية، أجب فقط بالنص التالي بدون زيادة:
-"⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
+        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال الآن ولغاية تاريخ: `{end_date}`.\nيمكنك الآن إرسال أي عدد من الشارتات للتحليل. بالتوفيق! 📈',
+        'prompt': """أنت نظام التحليل الفني الاحترافي TradeGuard AI.
+إذا لم تكن الصورة لشارت تداول مالي أو شموع يابانية، اكتب فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
 
-إذا كانت الصورة لشارت تداول، قم بإجراء تحليل فني دقيق واحترافي، وقدم النتيجة حصراً بالصيغة الهيكلية التالية، وبدون كتابة أي تفكير داخلي أو ملاحظات مسودة أو مقدمات أو خاتمات:
+إذا كانت الشارت صحيحاً، اكتب التحليل باللغة العربية فقط وبشكل مباشر ومختصر جداً مطابقاً للصيغة التالية تماماً بدون كتابة أفكار مسودة أو نصوص إنجليزية:
 
 1. الاتجاه العام:
-(شرح دقيق واحترافي للاتجاه الحالي وإطار الشمعة والتذبذب إن وجد)
+(وصف دقيق ومباشر للاتجاه والإطار الزمني)
 
 2. أقوى المقاومات:
-- المقاومة الأولى (السعر): (السبب الفني)
-- المقاومة الثانية (السعر): (السبب الفني)
-- المقاومة الثالثة (السعر): (السبب الفني)
+- المقاومة الأولى: (السعر + السبب)
+- المقاومة الثانية: (السعر + السبب)
+- المقاومة الثالثة: (السعر + السبب)
 
 3. أقوى الدعوم:
-- الدعم الأول (السعر): (السبب الفني)
-- الدعم الثاني (السعر): (السبب الفني)
-- الدعم الثالث (السعر): (السبب الفني)
+- الدعم الأول: (السعر + السبب)
+- الدعم الثاني: (السعر + السبب)
+- الدعم الثالث: (السعر + السبب)
 
 4. نسبة حدوث التوقع:
-- (نسبة مئوية % واضحة بناءً على المؤشرات والشموع)
+- (% نسبة مئوية حاسمة)
 
 5. الخلاصة والنصيحة:
-القرار الاستثماري: (شراء / بيع / انتظار) مع الشرح المباشر.
-- إيقاف الخسارة (SL): (مستوى السعر المحدد)
+القرار الاستثماري: (شراء / بيع / انتظار)
+- منطقة الدخول (Entry): (السعر المحدد للدخول)
+- إيقاف الخسارة (SL): (مستوى السعر)
 - أهداف البيع/الشراء (TP): (الهدف الأول والهدف الثاني)
-- تنبيه: (ملاحظة إدارة مخاطر تحذيرية حاسمة)"""
+- تنبيه: (ملاحظة إدارة مخاطر قصيرة)"""
     },
     'en': {
-        'welcome': "Welcome to TradeGuard AI 📈\nYour AI Assistant for Financial & Chart Analysis.\n\nChoose your language / اختر لغتك:",
+        'welcome': "Welcome to TradeGuard AI 📈\nChoose your language / اختر لغتك:",
         'lang_selected': "English language selected successfully ✅\nSend any chart image now for analysis.",
-        'wait': '⏳ Analyzing chart with high precision... Please wait.',
-        'no_trials': '⚠️ Sorry, you have used all your free trials (3/3).\n\nPlease subscribe to continue getting unlimited chart analysis.',
-        'account': '👤 **Your Account Details**\n\n🆔 User ID: `{user_id}`\n📊 Free Trials Used: {trials}/3\n💎 Subscription Status: {sub_status}',
-        'sub_info': '💎 **TradeGuard AI Subscription Plans**\n\n🔹 **10-Day Plan:** $20 (USDT)\n🔹 **Monthly Plan (30 Days):** $50 (USDT)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 After transfer, send transfer proof & your User ID (`{user_id}`) to Admin to activate:\n@TradeGuard_Admin',
+        'wait': '⏳ Analyzing chart... Please wait.',
+        'no_trials': '⚠️ Free trials ended (3/3). Please subscribe to continue.',
+        'account': '👤 **Your Account Details**\n\n🆔 User ID: `{user_id}`\n📊 Free Trials Used: {trials}/3\n💎 Subscription: {sub_status}',
+        'sub_info': '💎 **TradeGuard AI Subscription Plans**\n\n🔹 **10-Day Plan:** $20 (USDT)\n🔹 **Monthly Plan (30 Days):** $50 (USDT)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send transfer receipt & User ID (`{user_id}`) to Admin to activate:\n@TradeGuard_Admin',
         'active': 'Active ✅ (Expires: {end})',
         'inactive': 'Inactive ❌',
         'btn_acc': '👤 My Account',
         'btn_sub': '💎 Subscription',
-        'activate_success_user': '🎉 **Your Subscription is Active!**\n\nYour subscription is now active until: `{end_date}`.\nYou can now send unlimited charts for analysis. Happy trading! 📈',
-        'prompt': """You are TradeGuard AI, a strict professional financial chart analyst.
-If the provided image is not a financial candlestick chart, reply ONLY with:
-"⚠️ Sorry, this image is not a candlestick chart."
+        'activate_success_user': '🎉 **Subscription Activated!**\n\nActive until: `{end_date}`.\nEnjoy unlimited chart analysis! 📈',
+        'prompt': """You are TradeGuard AI chart analyst.
+If the image is not a candlestick chart, reply ONLY: "⚠️ Sorry, this image is not a candlestick chart."
 
-If valid, perform a precise technical analysis and return ONLY the structured report below, with NO internal thought process, draft notes, or self-corrections:
+If valid, output ONLY in English using this exact template with NO preambles or thoughts:
 
 1. Market Trend:
-(Detailed explanation of current trend and timeframe context)
+(Direct trend description and timeframe)
 
 2. Key Resistances:
-- First Resistance (Level): (Technical reason)
-- Second Resistance (Level): (Technical reason)
-- Third Resistance (Level): (Technical reason)
+- First Resistance: (Price + Reason)
+- Second Resistance: (Price + Reason)
+- Third Resistance: (Price + Reason)
 
 3. Key Supports:
-- First Support (Level): (Technical reason)
-- Second Support (Level): (Technical reason)
-- Third Support (Level): (Technical reason)
+- First Support: (Price + Reason)
+- Second Support: (Price + Reason)
+- Third Support: (Price + Reason)
 
 4. Probability of Success:
-- (Clear percentage % based on chart patterns)
+- (% percentage)
 
 5. Conclusion & Advice:
-Investment Decision: (Buy / Sell / Wait) with concise reasoning.
+Investment Decision: (Buy / Sell / Wait)
+- Entry Zone: (Exact price level)
 - Stop Loss (SL): (Price level)
 - Take Profit (TP): (Target 1 & Target 2)
-- Risk Warning: (Crucial management warning)"""
+- Risk Warning: (Short warning note)"""
     }
 }
 
@@ -165,12 +165,20 @@ def get_main_keyboard(lang):
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
 
-# === تنظيف مخرجات التحليل الفني من أفكار الذكاء الاصطناعي الجانبية ===
-def clean_analysis_output(text):
+# === تنظيف وتقليم مخرجات الذكاء الاصطناعي لمنع تكرار اللغات والأفكار ===
+def clean_analysis_output(text, target_lang):
     if not text:
         return text
-    patterns_to_remove = [
-        r'\(Self-Correction.*?\):?',
+    
+    # حظر ومسح كافة العبارات الإنجليزية والمسودات التفكرية إذا كانت اللغة المطلوبة عربية
+    if target_lang == 'ar':
+        # إذا عاد النص محتوياً على فقرات إنجليزية، نأخذ الجزء العربي النهائي فقط
+        if "1. الاتجاه العام:" in text:
+            text = "1. الاتجاه العام:" + text.split("1. الاتجاه العام:")[-1]
+    
+    # إزالة الأنماط العشوائية التفكيرية
+    patterns = [
+        r'\(Self-Correction.*?\)',
         r'Strict and professional\?.*?\n',
         r'Order followed\?.*?\n',
         r'No fluff\?.*?\n',
@@ -178,16 +186,18 @@ def clean_analysis_output(text):
         r'Numbers accurate\?.*?\n',
         r'Wait, looking closer.*?\n',
         r'Final Polish.*?\n',
-        r'Resulting analysis:?\n'
+        r'Resulting analysis:?\n',
+        r'Professional technical analysis system.*?\n'
     ]
     cleaned = text
-    for pattern in patterns_to_remove:
-        cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+    for p in patterns:
+        cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+    
     return cleaned.strip()
 
-# === معالج إرسال النصوص الطويلة وتخطي أخطاء تليجرام ===
-def safe_send_long_text(chat_id, status_message_id, full_text):
-    full_text = clean_analysis_output(full_text)
+# === معالج إرسال الرسائل ===
+def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar'):
+    full_text = clean_analysis_output(full_text, target_lang)
     chunk_size = 3800
     chunks = [full_text[i:i+chunk_size] for i in range(0, len(full_text), chunk_size)]
     
@@ -199,48 +209,42 @@ def safe_send_long_text(chat_id, status_message_id, full_text):
                 bot.send_message(chat_id=chat_id, text=chunk, parse_mode='Markdown')
         except telebot.apihelper.ApiTelegramException as e:
             error_msg = str(e).lower()
-            if "can't parse entities" in error_msg or "400" in error_msg or "bad request" in error_msg:
+            if "can't parse entities" in error_msg or "400" in error_msg:
                 try:
                     if index == 0:
                         bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=chunk, parse_mode=None)
                     else:
                         bot.send_message(chat_id=chat_id, text=chunk, parse_mode=None)
                 except Exception as inner_e:
-                    logger.error(f"Fallback sending failed: {inner_e}")
-            else:
-                logger.error(f"Telegram API Exception: {e}")
+                    logger.error(f"Fallback failed: {inner_e}")
 
-# === استكشاف المحركات والتحليل التلقائي ===
+# === توليد التحليل الفني ===
 def generate_chart_analysis(prompt, img):
     available_models = []
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
                 available_models.append(m.name)
-        logger.info(f"Discovered models for API Key: {available_models}")
     except Exception as e:
-        logger.error(f"Error fetching models list: {e}")
-        available_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'gemini-1.5-flash']
+        logger.error(f"Error listing models: {e}")
+        available_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash']
 
     if not available_models:
-        raise Exception("لم يتم العثور على أي نموذج ذكاء اصطناعي متاح لمفتاح API الخاص بك.")
+        raise Exception("لا يوجد نموذج ذكاء اصطناعي متاح حالياً.")
 
-    last_exception = None
     for model_name in available_models:
         try:
-            logger.info(f"Attempting analysis with model: {model_name}")
             model = genai.GenerativeModel(model_name)
             response = model.generate_content([prompt, img], safety_settings=safety_settings)
             if response and response.text:
                 return response.text
         except Exception as e:
             logger.warning(f"Model {model_name} failed: {e}")
-            last_exception = e
             continue
 
-    raise last_exception or Exception("تعذر الوصول لأي من محركات الذكاء الاصطناعي.")
+    raise Exception("تعذر تحليل الصورة، يرجى المحاولة لاحقاً.")
 
-# === أوامر البوت والأحداث ===
+# === الأوامر والمعالجات ===
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -257,8 +261,8 @@ def set_language(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
     bot.send_message(call.message.chat.id, TEXTS[lang]['lang_selected'], reply_markup=get_main_keyboard(lang))
 
-# معالج معلومات الحساب (يعمل بالعربية والإنجليزية والأمر)
-@bot.message_handler(func=lambda message: (message.text and ("حسابي" in message.text or "Account" in message.text or message.text == '/my_account')))
+# معالج حسابي المتطور
+@bot.message_handler(func=lambda m: m.text and ('حسابي' in m.text or 'Account' in m.text or m.text == '/my_account'))
 def account_info(message):
     user = get_user(message.chat.id)
     lang, trials, is_sub, _, end_date = user[1], user[2], user[3], user[4], user[5]
@@ -267,24 +271,20 @@ def account_info(message):
     msg = TEXTS[lang]['account'].format(user_id=message.chat.id, trials=trials, sub_status=sub_status)
     bot.reply_to(message, msg, parse_mode='Markdown')
 
-# معالج الاشتراك (تم إصلاحه ليعرض البيانات والمحفظة دائماً)
-@bot.message_handler(func=lambda message: (message.text and ("الاشتراك" in message.text or "Subscription" in message.text or message.text == '/subscribe')))
+# معالج زر الاشتراك (يعمل بشكل مباشر وموثوق 100%)
+@bot.message_handler(func=lambda m: m.text and ('الاشتراك' in m.text or 'Subscription' in m.text or m.text == '/subscribe'))
 def sub_info(message):
     user = get_user(message.chat.id)
     lang = user[1] if user[1] in TEXTS else 'ar'
     bot.reply_to(message, TEXTS[lang]['sub_info'].format(user_id=message.chat.id), parse_mode='Markdown')
 
-# أمر تفعيل الاشتراك من الآدمن مع إرسال إشعار فوري للمستخدم
+# أمر التفعيل بيدي الآدمن
 @bot.message_handler(commands=['activate'])
 def admin_activate(message):
     if str(message.chat.id) != str(ADMIN_ID):
         return 
     try:
         parts = message.text.split()
-        if len(parts) < 3:
-            bot.reply_to(message, "⚠️ صيغة الأمر الصحيحة:\n`/activate <User_ID> <Days>`\nمثال: `/activate 123456789 30`", parse_mode='Markdown')
-            return
-
         target_user_id = int(parts[1])
         days = int(parts[2])
         
@@ -299,18 +299,14 @@ def admin_activate(message):
         update_user(target_user_id, 'start_date', start_date.strftime('%Y-%m-%d'))
         update_user(target_user_id, 'end_date', end_date.strftime('%Y-%m-%d'))
         
-        # رد لتأكيد التفعيل للآدمن
-        bot.reply_to(message, f"✅ **تم تفعيل الاشتراك بنجاح!**\n\n👤 المستخدم: `{target_user_id}`\n📅 الأيام: {days} يوم\n📅 تاريخ الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
+        bot.reply_to(message, f"✅ **تم التفعيل!**\n👤 المستخدم: `{target_user_id}`\n📅 الفترة: {days} يوم\n📅 الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
         
-        # إرسال إشعار التفعيل تلقائياً إلى المستخدم
-        user_notify_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
-        bot.send_message(target_user_id, user_notify_msg, parse_mode='Markdown')
-
+        user_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
+        bot.send_message(target_user_id, user_msg, parse_mode='Markdown')
     except Exception as e:
-        logger.error(f"Activation Error: {e}")
-        bot.reply_to(message, f"❌ حدث خطأ أثناء التفعيل: {e}")
+        bot.reply_to(message, f"❌ خطأ: استخدم الصيغة `/activate <USER_ID> <DAYS>`")
 
-# معالج استقبال الصور والتحليل
+# معالج الصور
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     if not GEMINI_API_KEY:
@@ -321,17 +317,15 @@ def handle_photo(message):
     lang = user[1] if user[1] in TEXTS else 'ar'
     trials, is_sub, end_date_str = user[2], user[3], user[5]
     
-    # التحقق من انقضاء الاشتراك
     if is_sub:
         tz = pytz.timezone('Asia/Riyadh')
         try:
             if datetime.datetime.now(tz) > datetime.datetime.strptime(end_date_str, '%Y-%m-%d').replace(tzinfo=tz):
                 update_user(message.chat.id, 'is_sub', 0)
                 is_sub = 0
-        except Exception as e:
-            logger.error(f"Sub check error: {e}")
+        except:
+            pass
 
-    # التحقق من المحاولات المجانية
     if not is_sub and trials >= 3:
         bot.reply_to(message, TEXTS[lang]['no_trials'], parse_mode='Markdown')
         return
@@ -343,25 +337,20 @@ def handle_photo(message):
         downloaded_file = bot.download_file(file_info.file_path)
         img = Image.open(BytesIO(downloaded_file))
         
-        # إجراء التحليل بلغة المستخدم المختارة
         analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
-        
-        # إرسال النتيجة بآمان وتصفيتها من التفكير الجانبي
-        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result)
+        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
         
         if not is_sub:
             update_user(message.chat.id, 'trials', trials + 1)
 
     except Exception as e:
-        error_details = str(e)
-        logger.error(f"Chart Analysis Error: {traceback.format_exc()}")
-        msg = f"❌ تعذر استكمال التحليل.\nالسبب: `{error_details}`"
-        safe_send_long_text(message.chat.id, status_msg.message_id, msg)
+        logger.error(f"Error: {traceback.format_exc()}")
+        safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
 
-# === مسارات السيرفر ===
+# === تشغيل السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V9.0 (Ultimate Master Edition) is running active!"
+    return "TradeGuard AI V10.0 Active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -378,10 +367,7 @@ def webhook():
 if __name__ == "__main__":
     bot.remove_webhook()
     time.sleep(1) 
-    
     if RENDER_URL:
-        clean_url = RENDER_URL.rstrip('/')
-        bot.set_webhook(url=f"{clean_url}/{TELEGRAM_TOKEN}")
-    
+        bot.set_webhook(url=f"{RENDER_URL.rstrip('/')}/{TELEGRAM_TOKEN}")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, threaded=True)
