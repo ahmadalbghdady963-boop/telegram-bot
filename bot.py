@@ -1,256 +1,303 @@
 import os
-import time
-import requests
 import sqlite3
-import datetime
-import pytz
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+import requests
+import threading
+import time
 from flask import Flask, request
 import google.generativeai as genai
-from io import BytesIO
 from PIL import Image
+import io
 
-# === إعدادات النظام ===
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', 'AQ.Ab8RN6KaUs0xXwn13AUPE3F2LS160HOaVTkVLfyIOU-NkbWhJw')
-RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
-ADMIN_ID = os.environ.get('ADMIN_ID', '0') # ضع رقمك في إعدادات ريندر
+# ==================== 1. التكوين والتهيئات ====================
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+ADMIN_ID = os.environ.get("ADMIN_ID")  # معرف الآدمين بالتيليجرام (مثال: 123456789)
+SERVER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://telegram-bot-pqy3.onrender.com")
 
-# === تهيئة Gemini ===
+# إعداد Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-3.6-flash')
 
-# === تهيئة البوت والسيرفر ===
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 app = Flask(__name__)
 
-# === قاعدة البيانات المحلية (SQLite) ===
+# ==================== 2. قاعدة البيانات ====================
+DB_NAME = "tradeguard.db"
+
+def get_db():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db():
-    conn = sqlite3.connect('tradeguard.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY, lang TEXT, trials INTEGER, 
-                  is_sub INTEGER, start_date TEXT, end_date TEXT)''')
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                language TEXT DEFAULT 'en',
+                trials INTEGER DEFAULT 3,
+                is_vip INTEGER DEFAULT 0,
+                vip_expiry TIMESTAMP
+            )
+        ''')
+        conn.commit()
 
 init_db()
 
-def get_user(user_id):
-    conn = sqlite3.connect('tradeguard.db')
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    user = c.fetchone()
-    if not user:
-        c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", (user_id, 'ar', 0, 0, '', ''))
+def get_or_create_user(user_id, username):
+    with get_db() as conn:
+        user = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        if not user:
+            conn.execute(
+                "INSERT INTO users (user_id, username, trials, language) VALUES (?, ?, 3, 'en')",
+                (user_id, username or "User")
+            )
+            conn.commit()
+            user = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+        return user
+
+def update_user_trials(user_id, trials):
+    with get_db() as conn:
+        conn.execute("UPDATE users SET trials = ? WHERE user_id = ?", (trials, user_id))
         conn.commit()
-        user = (user_id, 'ar', 0, 0, '', '')
-    conn.close()
-    return user
 
-def update_user(user_id, field, value):
-    conn = sqlite3.connect('tradeguard.db')
-    c = conn.cursor()
-    c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
-    conn.commit()
-    conn.close()
+def set_user_language(user_id, lang):
+    with get_db() as conn:
+        conn.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
+        conn.commit()
 
-# === نصوص اللغات ===
-TEXTS = {
-    'ar': {
-        'wait': '⏳ الرجاء الانتظار، جاري التحليل الفني الدقيق...',
-        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في الاستفادة من تحليلات TradeGuard الدقيقة، يرجى الاشتراك.',
-        'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المجانية: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
-        'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **اشتراك 10 أيام:** 20 دولار\n🔹 **اشتراك شهري:** 50 دولار\n\n📥 **طريقة الدفع (USDT - TON):**\nعنوان المحفظة:\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **للتفعيل:** أرسل صورة إشعار التحويل مع الـ ID الخاص بك (`{user_id}`) إلى الإدارة:\n@TradeGuard_Admin',
-        'active': 'فعال ✅ (ينتهي في {end})',
-        'inactive': 'غير فعال ❌',
-        'btn_acc': '👤 حسابي',
-        'btn_sub': '💎 الاشتراك',
-        'prompt': """أنت محلل أسواق مالية صارم TradeGuard AI.
-إذا لم تكن الصورة لشارت مالي، قل فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
-إذا كانت صحيحة، أعطني تحليلاً احترافياً مفصلاً جداً بدون أي مقدمات أو خاتمات، بالترتيب التالي:
-1. الاتجاه العام: (شرح دقيق لحالة السوق الحالية)
-2. أقوى المقاومات: (أرقام دقيقة مع ذكر السبب التقني)
-3. أقوى الدعوم: (أرقام دقيقة مع ذكر السبب التقني)
-4. نسبة حدوث التوقع: (أعطني نسبة مئوية % لنجاح الحركة المتوقعة بناءً على الشارت)
-5. الخلاصة والنصيحة: (قرار استثماري واضح ومباشر)."""
-    },
-    'en': {
-        'wait': '⏳ Please wait, performing accurate technical analysis...',
-        'no_trials': '⚠️ Sorry, your free trials have ended (3/3).\n\nTo continue using TradeGuard insights, please subscribe.',
-        'account': '👤 **Your Account**\n\n🆔 Your ID: `{user_id}`\n📊 Free Trials: {trials}/3\n💎 Subscription: {sub_status}',
-        'sub_info': '💎 **TradeGuard AI Subscriptions**\n\n🔹 **10 Days:** $20\n🔹 **1 Month:** $50\n\n📥 **Payment Method (USDT - TON):**\nWallet Address:\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **To Activate:** Send the payment receipt and your ID (`{user_id}`) to Admin:\n@TradeGuard_Admin',
-        'active': 'Active ✅ (Ends: {end})',
-        'inactive': 'Inactive ❌',
-        'btn_acc': '👤 My Account',
-        'btn_sub': '💎 Subscription',
-        'prompt': """You are a strict financial analyst, TradeGuard AI.
-If the image is not a financial chart, reply ONLY with: "⚠️ Sorry, this image is not a candlestick chart."
-If valid, provide a highly detailed professional analysis with NO intro/outro, in this exact format:
-1. Market Trend: (Detailed explanation of current state)
-2. Key Resistances: (Precise numbers with technical reasoning)
-3. Key Supports: (Precise numbers with technical reasoning)
-4. Probability of Success: (Provide a percentage % for the expected move based on the chart)
-5. Conclusion & Advice: (Clear, direct investment decision)."""
-    }
-}
-
-# === لوحات المفاتيح (القوائم) ===
-def get_main_keyboard(lang):
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
-    return markup
-
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"), 
-               InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"))
-    bot.reply_to(message, "Welcome to TradeGuard AI 📈\nPlease choose your language / الرجاء اختيار لغتك:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
-def set_language(call):
-    lang = call.data.split('_')[1]
-    update_user(call.message.chat.id, 'lang', lang)
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    
-    welcome_msg = "أهلاً بك في TradeGuard AI! أرسل أي صورة لشارت للتحليل." if lang == 'ar' else "Welcome to TradeGuard AI! Send any chart image for analysis."
-    bot.send_message(call.message.chat.id, welcome_msg, reply_markup=get_main_keyboard(lang))
-
-@bot.message_handler(func=lambda message: message.text in [TEXTS['ar']['btn_acc'], TEXTS['en']['btn_acc'], '/my_account'])
-def account_info(message):
-    user = get_user(message.chat.id)
-    lang, trials, is_sub, _, end_date = user[1], user[2], user[3], user[4], user[5]
-    
-    if is_sub:
-        sub_status = TEXTS[lang]['active'].format(end=end_date)
-    else:
-        sub_status = TEXTS[lang]['inactive']
-        
-    msg = TEXTS[lang]['account'].format(user_id=message.chat.id, trials=trials, sub_status=sub_status)
-    bot.reply_to(message, msg, parse_mode='Markdown')
-
-@bot.message_handler(func=lambda message: message.text in [TEXTS['ar']['btn_sub'], TEXTS['en']['btn_sub'], '/subscribe'])
-def sub_info(message):
-    user = get_user(message.chat.id)
-    lang = user[1]
-    msg = TEXTS[lang]['sub_info'].format(user_id=message.chat.id)
-    bot.reply_to(message, msg, parse_mode='Markdown')
-
-# === لوحة تحكم الإدارة (تفعيل الاشتراكات) ===
-@bot.message_handler(commands=['activate'])
-def admin_activate(message):
-    if str(message.chat.id) != str(ADMIN_ID):
-        return # يتجاهل الأمر إذا لم يكن المدير
-    
-    try:
-        # Format: /activate <USER_ID> <DAYS>
-        parts = message.text.split()
-        target_user = int(parts[1])
-        days = int(parts[2])
-        
-        tz = pytz.timezone('Asia/Riyadh')
-        start_date = datetime.datetime.now(tz)
-        end_date = start_date + datetime.timedelta(days=days)
-        
-        start_str = start_date.strftime('%Y-%m-%d')
-        end_str = end_date.strftime('%Y-%m-%d')
-        
-        update_user(target_user, 'is_sub', 1)
-        update_user(target_user, 'start_date', start_str)
-        update_user(target_user, 'end_date', end_str)
-        
-        bot.reply_to(message, f"✅ تم تفعيل الاشتراك للمستخدم {target_user} بنجاح لمدة {days} يوم.")
-        
-        # إرسال إشعار للمشترك
-        t_user = get_user(target_user)
-        lang = t_user[1]
-        if lang == 'ar':
-            notif = f"🎉 **مبارك! تم تفعيل اشتراكك بنجاح**\n\n📅 يبدأ من: {start_str}\n⏳ ينتهي في: {end_str}\n\nيمكنك الآن إرسال الشارتات بحرية تامة 🚀"
-        else:
-            notif = f"🎉 **Subscription Activated!**\n\n📅 Starts: {start_str}\n⏳ Ends: {end_str}\n\nYou can now send charts freely 🚀"
-        bot.send_message(target_user, notif, parse_mode='Markdown')
-        
-    except Exception as e:
-        bot.reply_to(message, "❌ خطأ في الصيغة. استخدم:\n/activate <رقم_المستخدم> <عدد_الأيام>")
-
-# === معالجة الصور والتحليل ===
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    user = get_user(message.chat.id)
-    lang, trials, is_sub, end_date_str = user[1], user[2], user[3], user[5]
-    
-    # فحص الاشتراك وتاريخ الانتهاء
-    if is_sub:
-        tz = pytz.timezone('Asia/Riyadh')
+# ==================== 3. ميزة البقاء مستيقظاً (Self-Ping Keep-Alive) ====================
+def keep_alive():
+    """تمنع استضافة Render المجانية من حالة النوم باستدعاء السيرفر كل 10 دقائق"""
+    while True:
+        time.sleep(600) # كل 10 دقائق
         try:
-            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').replace(tzinfo=tz)
-            if datetime.datetime.now(tz) > end_date:
-                update_user(message.chat.id, 'is_sub', 0) # انتهى الاشتراك
-                is_sub = 0
-        except:
-            pass
-
-    # منع الاستخدام إذا انتهت المحاولات ولم يكن مشتركاً
-    if not is_sub and trials >= 3:
-        bot.reply_to(message, TEXTS[lang]['no_trials'] + "\n\n" + TEXTS[lang]['sub_info'].format(user_id=message.chat.id), parse_mode='Markdown')
-        return
-
-    status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
-    
-    try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
-        
-        image_response = requests.get(file_url, timeout=15)
-        if image_response.status_code != 200:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ Error downloading image.")
-            return
-            
-        img = Image.open(BytesIO(image_response.content))
-        prompt = TEXTS[lang]['prompt']
-
-        # استدعاء Gemini
-        response = model.generate_content([prompt, img])
-        
-        if response.text:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=response.text, parse_mode='Markdown')
-            # زيادة عدد المحاولات إذا لم يكن مشتركاً
-            if not is_sub:
-                update_user(message.chat.id, 'trials', trials + 1)
-        else:
-            bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ Error: Empty response.")
-
-    except Exception as e:
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=f"❌ Error occurred. Please try again.")
-        print(f"Internal Error: {e}")
-
-# === مسار الويب هوك الخاص بـ Render ===
-@app.route('/', methods=['GET'])
-def home():
-    return "TradeGuard AI V2.0 is live and running!"
-
-@app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        try:
-            json_string = request.get_data().decode('utf-8')
-            update = telebot.types.Update.de_json(json_string)
-            bot.process_new_updates([update])
+            if SERVER_URL:
+                requests.get(SERVER_URL, timeout=10)
+                print("[Keep-Alive] Pinged server successfully.")
         except Exception as e:
-            print("Webhook Error:", e)
+            print(f"[Keep-Alive] Ping failed: {e}")
+
+threading.Thread(target=keep_alive, daemon=True).start()
+
+# ==================== 4. إرسال الرسائل لتيليجرام ====================
+def send_telegram_message(chat_id, text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Error sending message: {e}")
+
+def get_main_keyboard(lang='en'):
+    if lang == 'ar':
+        return {
+            "keyboard": [
+                [{"text": "👤 حسابي"}, {"text": "💎 الاشتراك"}],
+                [{"text": "🌐 تغيير اللغة"}]
+            ],
+            "resize_keyboard": True
+        }
+    else:
+        return {
+            "keyboard": [
+                [{"text": "👤 My Account"}, {"text": "💎 Subscription"}],
+                [{"text": "🌐 Change Language"}]
+            ],
+            "resize_keyboard": True
+        }
+
+def send_subscription_info(chat_id, lang='en'):
+    if lang == 'ar':
+        msg = (
+            "💎 **باقات الاشتراك في TradeGuard AI**\n\n"
+            "📌 **الباقات المتاحة:**\n"
+            "▫️ **باقة 10 أيام:** 20$ (تحليل غير محدود)\n"
+            "▫️ **الباقة الشهرية (30 يوم):** 50$ (تحليل غير محدود)\n\n"
+            "💳 **عنوان محفظة الدفع (USDT - TRC20):**\n"
+            "`TQxYourTRC20WalletAddressHereID`\n\n"
+            "📩 **طريقة التفعيل:**\n"
+            "بعد إتمام عملية التحويل، يرجى إرسال لقطة شاشة لإشعار الدفع مع معرف حسابك إلى الإدارة لتفعيل الاشتراك فوراً:\n"
+            "👤 **الدعم الفني والاشتراكات:** @Ahmad_Admin"
+        )
+    else:
+        msg = (
+            "💎 **TradeGuard AI Subscription Plans**\n\n"
+            "📌 **Available Plans:**\n"
+            "▫️ **10-Day Pass:** $20 (Unlimited Analyses)\n"
+            "▫️ **Monthly Pass (30 Days):** $50 (Unlimited Analyses)\n\n"
+            "💳 **USDT (TRC20) Payment Address:**\n"
+            "`TQxYourTRC20WalletAddressHereID`\n\n"
+            "📩 **How to Activate:**\n"
+            "After completing the transfer, please send a screenshot of the transaction receipt along with your User ID to Admin for instant activation:\n"
+            "👤 **Support & Subscriptions:** @Ahmad_Admin"
+        )
+    send_telegram_message(chat_id, msg)
+
+# ==================== 5. تحليل الشارت بواسطة الذكاء الاصطناعي ====================
+def analyze_chart_with_gemini(image_bytes, lang='en'):
+    prompt_ar = """
+    أنت خبير تحليل فني وتداول عملات وأسهم محترف. قم بتحليل صورة الشارت المرفقة بدقة عالية وقدم تقريراً فنياً باللغة العربية بالتنسيق التالي حصراً:
+
+    1. اتجاه السوق (Market Trend): شرح مختصر لاتجاه الحركة الحالية والهيكلية.
+    2. المستويات الرئيسية:
+       - المقاومات (Key Resistances): حدد النقاط بدقة.
+       - الدعوم (Key Supports): حدد النقاط بدقة.
+    3. تفاصيل الصفقة المقترحة (Trade Setup):
+       - نقطة الدخول للصفقة (Entry Point): حدد السعر أو المنطقة المناسبة للدخول.
+       - مكان وقف الخسارة (Stop Loss): حدد مستوى إيقاف الخسارة بدقة لحماية رأس المال.
+       - مكان المكسب الأول (Take Profit 1): الهدف الأول لربح الصفقة.
+       - مكان المكسب الثاني (Take Profit 2): الهدف الثاني لربح الصفقة.
+    4. نسبة نجاح الصفقة (Probability of Success): اذكر النسبة المئوية المتوقعة (مثال 65%).
+    5. الخلاصة والنصيحة (Conclusion & Advice): نصيحة صريحة (انتظار / شراء / بيع) مع التوجيه المتزن.
+    """
+
+    prompt_en = """
+    You are a professional technical analysis trader. Analyze the attached chart image with precision and provide a technical report in English strictly following this structure:
+
+    1. Market Trend: Concise structure and current momentum breakdown.
+    2. Key Levels:
+       - Key Resistances: Exact levels.
+       - Key Supports: Exact levels.
+    3. Trade Setup Details:
+       - Entry Point: Precise entry price or buy/sell zone.
+       - Stop Loss: Precise level to stop losses and manage risk.
+       - Take Profit 1 (TP1): First target for taking profits.
+       - Take Profit 2 (TP2): Second target for taking profits.
+    4. Probability of Success: Estimated percentage (e.g., 65%).
+    5. Conclusion & Advice: Direct action recommendation (WAIT / BUY / SELL) with clear context.
+    """
+
+    prompt = prompt_ar if lang == 'ar' else prompt_en
+
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content([prompt, image])
+        return response.text
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+        # تجربة نموذج بديل في حال وجود ضغط على النموذج الرئيسي
+        try:
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            response = model.generate_content([prompt, image])
+            return response.text
+        except Exception as e2:
+            print(f"Gemini Fallback Error: {e2}")
+            return None
+
+def process_photo_async(chat_id, user_id, photo_file_id, lang):
+    # إرسال رسالة انتظار للمستخدم
+    wait_msg = "⏳ Please wait, performing accurate technical analysis..." if lang != 'ar' else "⏳ جاري تحليل الشارت بدقة، يرجى الانتظار..."
+    send_telegram_message(chat_id, wait_msg)
+
+    try:
+        # جلب الصورة من سرفرات تيليجرام
+        file_info_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={photo_file_id}"
+        res = requests.get(file_info_url).json()
+        file_path = res['result']['file_path']
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        img_data = requests.get(file_url).content
+
+        # التحليل بواسطة الذكاء الاصطناعي
+        analysis = analyze_chart_with_gemini(img_data, lang)
+
+        if analysis:
+            send_telegram_message(chat_id, analysis, reply_markup=get_main_keyboard(lang))
+        else:
+            err_msg = "❌ فشل تحليل الصورة، يرجى إعادة المحاولة بنوع صورة أوضح." if lang == 'ar' else "❌ Failed to analyze image. Please try again with a clearer chart."
+            send_telegram_message(chat_id, err_msg)
+    except Exception as e:
+        print(f"Error processing photo: {e}")
+        err_msg = "❌ حدث خطأ أثناء المعالجة، يرجى المحاولة لاحقاً." if lang == 'ar' else "❌ Error occurred. Please try again."
+        send_telegram_message(chat_id, err_msg)
+
+# ==================== 6. معالجة تحديثات تيليجرام ====================
+@app.route("/", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        return "TradeGuard AI Bot is Running 24/7!", 200
+
+    update = request.get_json()
+    if not update or "message" not in update:
         return "OK", 200
-    return "Forbidden", 403
+
+    message = update["message"]
+    chat_id = message["chat"]["id"]
+    user_id = message["from"]["id"]
+    username = message["from"].get("username", "")
+
+    user = get_or_create_user(user_id, username)
+    lang = user["language"]
+    trials = user["trials"]
+    is_vip = user["is_vip"]
+
+    # --- معالجة الصور المرسلة ---
+    if "photo" in message:
+        # التحقق من المحاولات أو اشتراك VIP
+        if not is_vip and trials <= 0:
+            msg_out = "⚠️ لقد استنفذت جميع المحاولات المجانية.\nيرجى الاشتراك للاستمرار في استخدام البوت." if lang == 'ar' else "⚠️ You have reached the limit of your free trial requests.\nPlease subscribe to continue using the bot."
+            send_telegram_message(chat_id, msg_out)
+            send_subscription_info(chat_id, lang)
+            return "OK", 200
+
+        # خصم محاولة وتحديث قاعدة البيانات فوراً
+        if not is_vip:
+            new_trials = trials - 1
+            update_user_trials(user_id, new_trials)
+
+        photo = message["photo"][-1] # أكبر حجم للصورة
+        threading.Thread(target=process_photo_async, args=(chat_id, user_id, photo['file_id'], lang)).start()
+        return "OK", 200
+
+    # --- معالجة النصوص والأوامر ---
+    if "text" in message:
+        text = message["text"].strip()
+
+        if text == "/start":
+            welcome_msg = (
+                "👋 **أهلاً بك في TradeGuard AI**\nقم بإرسال صورة الشارت للحصول على تحليل فني دقيق وإشارات الدخول والأهداف."
+                if lang == 'ar' else
+                "👋 **Welcome to TradeGuard AI**\nSend any chart image to get instant technical analysis, entry points, and targets."
+            )
+            send_telegram_message(chat_id, welcome_msg, reply_markup=get_main_keyboard(lang))
+
+        elif text in ["👤 حسابي", "👤 My Account"]:
+            status_str = "VIP ⭐" if is_vip else f"{trials} free trials remaining"
+            if lang == 'ar':
+                acc_msg = f"👤 **معلومات الحساب:**\n▫️ **المعرف (ID):** `{user_id}`\n▫️ **الرصيد/الحالة:** {status_str}"
+            else:
+                acc_msg = f"👤 **Account Info:**\n▫️ **User ID:** `{user_id}`\n▫️ **Status:** {status_str}"
+            send_telegram_message(chat_id, acc_msg)
+
+        elif text in ["💎 الاشتراك", "💎 Subscription", "/subscribe"]:
+            send_subscription_info(chat_id, lang)
+
+        elif text in ["🌐 تغيير اللغة", "🌐 Change Language"]:
+            new_lang = 'en' if lang == 'ar' else 'ar'
+            set_user_language(user_id, new_lang)
+            confirm_msg = "تم تغيير اللغة إلى العربية 🇸🇦" if new_lang == 'ar' else "Language changed to English 🇬🇧"
+            send_telegram_message(chat_id, confirm_msg, reply_markup=get_main_keyboard(new_lang))
+
+        # --- لوحة التحكم الخاصة بك كآدمين لتفعيل الاشتراكات ---
+        # استخدام الأمر: /vip USER_ID (مثال: /vip 12345678)
+        elif text.startswith("/vip") and str(user_id) == str(ADMIN_ID):
+            parts = text.split()
+            if len(parts) > 1:
+                target_user_id = parts[1]
+                with get_db() as conn:
+                    conn.execute("UPDATE users SET is_vip = 1 WHERE user_id = ?", (target_user_id,))
+                    conn.commit()
+                send_telegram_message(chat_id, f"✅ تم تفعيل الاشتراك VIP للمستخدم `{target_user_id}` بنجاح!")
+                send_telegram_message(target_user_id, "🎉 **مبروك! تم تفعيل اشتراكك الـ VIP بنجاح. يمكنك الآن تحليل عدد لا محدود من الشارتات!**")
+
+    return "OK", 200
 
 if __name__ == "__main__":
-    bot.remove_webhook()
-    time.sleep(1) 
-    
-    if RENDER_URL:
-        clean_url = RENDER_URL.rstrip('/')
-        bot.set_webhook(url=f"{clean_url}/{TELEGRAM_TOKEN}")
-    
     port = int(os.environ.get("PORT", 10000))
-    # Threaded=True مضافة داخل Flask لضمان عدم تعطل البوت تحت الضغط
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    app.run(host="0.0.0.0", port=port)
