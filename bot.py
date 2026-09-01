@@ -14,27 +14,46 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- 1. الإعدادات والتهيئة ---
+# 1. إعداد نظام التسجيل (Logging)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# جلب المتغيرات
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").rstrip("/")
+# 2. جلب المتغيرات البيئية من Render
+TOKEN = (
+    os.environ.get("TELEGRAM_BOT_TOKEN") 
+    or os.environ.get("TELEGRAM_TOKEN") 
+    or ""
+).strip()
+
+WEBHOOK_URL = (
+    os.environ.get("WEBHOOK_URL") 
+    or ""
+).strip().rstrip("/")
+
 PORT = int(os.environ.get("PORT", "10000"))
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-# تهيئة تطبيق FastAPI وخادم Telegram
+GEMINI_API_KEY = (
+    os.environ.get("GEMINI_API_KEY") 
+    or os.environ.get("GEMINI_API") 
+    or ""
+).strip()
+
+# 3. تهيئة FastAPI والتطبيقات
 app = FastAPI()
-ptb_app = Application.builder().token(TOKEN).build()
 
-# --- 2. دوال معالجة أوامر تليجرام ---
+if not TOKEN:
+    logger.error("❌ المتغير TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN مفقود!")
+    ptb_app = None
+else:
+    ptb_app = Application.builder().token(TOKEN).build()
+
+# --- 4. دوال التعامل مع الأوامر ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.message.from_user.first_name if update.message.from_user else "المستخدم"
+    user_name = update.message.from_user.first_name if (update.message and update.message.from_user) else "المستخدم"
     welcome_text = (
         f"مرحباً بك {user_name} في TradeGuard AI! 🤖📈\n\n"
         f"أنا هنا لمساعدتك في التحليل الفني المالي.\n"
@@ -84,7 +103,8 @@ async def analyze_image_with_gemini(base64_image: str) -> str:
             try:
                 response = await client.post(url, json=payload, headers={"Content-Type": "application/json"})
                 if response.status_code == 200:
-                    return response.json()['candidates'][0]['content']['parts'][0]['text']
+                    res_data = response.json()
+                    return res_data['candidates'][0]['content']['parts'][0]['text']
                 else:
                     last_error = f"رمز ({response.status_code})"
             except Exception as e:
@@ -107,61 +127,59 @@ async def handle_chart_image(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await processing_msg.edit_text(ai_response)
     except Exception as e:
         logger.error(f"Error analyzing chart: {e}", exc_info=True)
-        await update.message.reply_text("❌ حدث خطأ أثناء معالجة الصورة.")
+        await update.message.reply_text(f"❌ حدث خطأ أثناء معالجة الصورة: {str(e)}")
 
-# --- 3. تسجيل الأوامر في التطبيق ---
-ptb_app.add_handler(CommandHandler("start", start_command))
-ptb_app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
-ptb_app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
-ptb_app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
+# ربط الأوامر بالـ ptb_app
+if ptb_app:
+    ptb_app.add_handler(CommandHandler("start", start_command))
+    ptb_app.add_handler(MessageHandler(filters.Regex("^👤 حسابي$"), account_command))
+    ptb_app.add_handler(MessageHandler(filters.Regex("^💎 الاشتراك$"), subscription_command))
+    ptb_app.add_handler(MessageHandler(filters.PHOTO, handle_chart_image))
 
-# --- 4. إعدادات FastAPI للـ Webhook ---
+# --- 5. مسارات الـ Webhook و Render Health Check ---
 
-@app.post(f"/{TOKEN}")
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root_health_check():
+    """مسار اختبار الصحة لتجاوز فحص Render وتجنب خطأ 405"""
+    return {"status": "ok", "message": "TradeGuard AI Server is running"}
+
+@app.post(f"/{TOKEN}" if TOKEN else "/webhook")
 async def telegram_webhook(request: Request):
-    """استقبال التحديثات من تليجرام عبر المسار المؤمن بالتوكن"""
+    """استقبال التحديثات المباشرة وترحيلها للبوت"""
+    if not ptb_app:
+        return Response(status_code=500, content="Bot app not initialized")
+    
     try:
         data = await request.json()
         update = Update.de_json(data, ptb_app.bot)
-        
-        # التأكد من تهيئة وتشغيل تطبيق تليجرام
-        if not ptb_app._initialized:
-            await ptb_app.initialize()
-            await ptb_app.start()
-
         await ptb_app.process_update(update)
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}", exc_info=True)
+        logger.error(f"Error processing update: {e}", exc_info=True)
+        return Response(status_code=500)
     
     return Response(status_code=200)
 
-@app.get("/")
-def health_check():
-    """مسار صحة الخادم للتأكد من عمله على Render"""
-    return {"status": "TradeGuard AI Bot is Running!"}
-
 @app.on_event("startup")
 async def on_startup():
-    """عند بدء تشغيل الخادم، قم بتسجيل الـ Webhook مع تليجرام"""
-    if TOKEN and WEBHOOK_URL:
-        webhook_path = f"{WEBHOOK_URL}/{TOKEN}"
-        await ptb_app.bot.set_webhook(url=webhook_path, drop_pending_updates=True)
-        logger.info(f"✅ Webhook is set to: {webhook_path}")
-    else:
-        logger.error("❌ TOKEN or WEBHOOK_URL is missing!")
+    """تنشيط المحرك وتمرير الـ Webhook لتليجرام عند بدء التشغيل"""
+    if ptb_app:
+        logger.info("⚡ Initializing and starting PTB Application...")
+        await ptb_app.initialize()
+        await ptb_app.start()
+        
+        if WEBHOOK_URL and TOKEN:
+            full_webhook_url = f"{WEBHOOK_URL}/{TOKEN}"
+            logger.info(f"🔗 Setting Telegram Webhook to: {full_webhook_url}")
+            success = await ptb_app.bot.set_webhook(url=full_webhook_url, drop_pending_updates=True)
+            logger.info(f"✅ Webhook set status: {success}")
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    """عند إيقاف الخادم"""
-    if ptb_app._initialized:
+    """إغلاق محرك تليجرام عند توقف السيرفر"""
+    if ptb_app:
+        logger.info("🛑 Stopping PTB Application...")
         await ptb_app.stop()
         await ptb_app.shutdown()
 
-# --- 5. نقطة الدخول الرئيسية ---
 if __name__ == "__main__":
-    if not TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN is missing!")
-    else:
-        # تشغيل خادم Uvicorn الذي سيحتضن FastAPI و Telegram معاً
-        logger.info(f"🚀 Starting Uvicorn server on port {PORT}...")
-        uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
