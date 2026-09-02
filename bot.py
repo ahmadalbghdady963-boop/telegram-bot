@@ -30,7 +30,6 @@ if not TELEGRAM_TOKEN:
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# إعدادات الأمان
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -38,19 +37,17 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# ضبط دقة الذكاء الاصطناعي الصارمة (صفر تخمين)
+# قفل التفكير العشوائي تماماً
 ANALYTICAL_GEN_CONFIG = GenerationConfig(
     temperature=0.0,
-    top_p=0.1,
+    top_p=0.0, # تقليل احتمالية اختيار كلمات غير متوقعة للصفر
     top_k=1,
     max_output_tokens=2048
 )
 
-# === تهيئة البوت والسيرفر ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 app = Flask(__name__)
 
-# === إدارة قاعدة البيانات ===
 def get_db_connection():
     return sqlite3.connect('tradeguard.db', check_same_thread=False, timeout=20)
 
@@ -90,61 +87,53 @@ def update_user(user_id, field, value):
     finally:
         conn.close()
 
-# === نصوص وقوالب اللغات المحسنة بدقة واقعية ===
+# === الأوامر الصارمة الجديدة ===
 TEXTS = {
     'ar': {
         'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي والاحترافي لتحليل الشارتات المالية.\n\nالرجاء اختيار لغتك / Choose your language:",
         'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي صورة لشارت مالي للتحليل المؤسسي الآن.",
-        'wait': '⏳ جاري مسح محاور الشارت وهيكل السوق وتجهيز التقرير الواقعي... برجاء الانتظار.',
-        'no_trials_msg': '⚠️ **لقد تم إنهاء محاولاتك المجانية.**\n\nللاستمرار في الاستفادة من تحليلات الذكاء الاصطناعي، رجاءً شحن حسابك:\n🔹 **20 دولار** (10 أيام)\n🔹 **50 دولار** (شهري)\n\n📥 **عنوان الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل أرسل صورة التحويل والـ ID `{user_id}` إلى:\n@TradeGuard_Admin',
+        'wait': '⏳ جاري القياس الدقيق للمحاور السعرية وتحديد خطة تداول مطابقة للسعر الحالي...',
+        'no_trials_msg': '⚠️ **لقد تم إنهاء محاولاتك المجانية.**\n\nللاستمرار، رجاءً شحن حسابك:\n🔹 **20 دولار** (10 أيام)\n🔹 **50 دولار** (شهري)\n\n📥 **عنوان الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل راسل:\n@TradeGuard_Admin',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
         'sub_info': '💎 **باقات الاشتراك**\n\n🔹 **10 أيام:** 20 دولار (USDT)\n🔹 **شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل راسل:\n@TradeGuard_Admin',
         'active': 'فعال ✅ (ينتهي: {end})',
         'inactive': 'غير فعال ❌',
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
-        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nصالح لغاية: `{end_date}`.\nيمكنك الآن إرسال الشارتات بحرية. بالتوفيق! 📈',
-        'prompt': """أنت محرر ومحلل مالي مؤسسي احترافي وخبير في قراءة الشارتات (Price Action & Smart Money Concepts).
-مهمتك تقديم تحليل دقيق ومستخرج 100% من البيانات البصرية الظاهرة في الصورة دون أي فرضيات أو أرقام من خيالك.
+        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nصالح لغاية: `{end_date}`. بالتوفيق! 📈',
+        'prompt': """أنت نظام تدقيق رياضي وحاسوب تداول صارم. مهمتك قراءة الشارت المرفق واستخراج الأرقام الحقيقية الظاهرة فقط. 
+يمنع التخمين أو وضع نقاط دخول بعيدة. يجب أن تكون الأرقام متطابقة مع السعر الظاهر بدقة الفواصل العشرية.
 
-قواعد واستخراج البيانات الإجباري (OCR Protocol):
-1. افحص الصورة واقرأ اسم الزوج/السهم، الإطار الزمني، والسعر الحالي الظاهر خطياً أو على محور الأسعار الأيمن.
-2. حدد أدنى سعر وأعلى سعر ظاهرين على المحور العمودي الأيمن.
-3. يمنع منعاً باتاً اقتراح أي أسعار للتداول خارج النطاق السعري المرئي في الصورة.
+البروتوكول الإجباري:
+1. اقرأ السعر الحالي (Current Price) المكتوب بجوار الخط الأفقي (مثال: في شارت الفضة هذا السعر هو 64.27).
+2. نقطة الدخول (Entry Price) **يجب أن تكون هي نفسها السعر الحالي** أو قريبة منه بحد أقصى خطوة عشرية واحدة. لا تعطي دخولاً يبعد 50 نقطة أبداً!
+3. يجب أن تكون جميع الأهداف (TP) ووقف الخسارة (SL) ضمن النطاق السعري المرئي على المحور الأيمن (Y-axis).
 
-إذا لم تكن الصورة لشارت تداول واضح أو أرقامه غير مقروءة، اكتب فقط: "⚠️ الصورة لا تحتوي على شارت تداول واضح أو أن الأرقام غير جليّة."
+أخرج التحليل بهذا التنسيق فقط:
 
-إذا كان شارتاً واضحاً، اكتب التقرير باللغة العربية بأسلوب مباشر ومطابق تماماً لهذا التنسيق:
+1. 📌 بيانات التدقيق السعري:
+- الأصل/الزوج: [اكتب اسم الزوج]
+- السعر الحالي الفعلي: [اكتب السعر الظاهر بدقة]
+- النطاق السعري المرئي: من [أقل سعر بالصورة] إلى [أعلى سعر بالصورة]
 
-1. 📌 بيانات الشارت الفعلي:
-- الأداة / الزوج: [اكتب اسم الزوج الظاهر بدقة، مثلاً AUDUSD]
-- الإطار الزمني: [اكتب الفريم الظاهر، مثلاً M15]
-- السعر الحالي: [اكتب السعر الحالي الظاهر بدقة من المحور]
+2. 🚧 المستويات المفتاحية:
+- أقرب مقاومة مرئية: (السعر الدقيق بناءً على الشموع السابقة)
+- أقرب دعم مرئي: (السعر الدقيق)
 
-2. 📊 الاتجاه وهيكل السوق (Structure):
-- الاتجاه العام: (صاعد / هابط / عرضي)
-- توصيف الحركة: (شرح مختصر ومباشر للشموع الأخيرة والسلوك السعري)
+3. 🎯 التوصية المباشرة (Market Execution):
+- القرار: (شراء / بيع من السعر الحالي)
+- نقطة الدخول (Entry): (يجب أن تتطابق مع السعر الحالي أو تختلف بشكل طفيف جداً)
+- وقف الخسارة (SL): (رقم منطقي وقريب بناءً على الدعم/المقاومة المرئية)
+- الهدف (TP): (رقم منطقي داخل النطاق المرئي)
 
-3. 🚧 المستويات المفتاحية (من المحور العمودي حصراً):
-- مقاومة رئيسية: (السعر الدقيق + السبب)
-- دعم رئيسي: (السعر الدقيق + السبب)
-
-4. 🎯 خطة التداول الحقيقية (Real Trade Setup):
-- القرار: (شراء / بيع / انتظار)
-- نقطة الدخول (Entry): (مستوى سعري دقيق موجود بالنطاق المرئي)
-- وقف الخسارة (SL): (مستوى حماية دقيق)
-- Target 1 (TP1): (السعر)
-- Target 2 (TP2): (السعر)
-
-5. 📈 نسبة نجاح الصفقة: (نسبة مئوية بناءً على قوة النموذج)
-
-⚠️ تذكير: الالتزام الصارم بوقف الخسارة وإدارة المخاطر."""
+⚠️ تنبيه للنظام: إذا كانت المسافة بين الدخول والسعر الحالي غير منطقية، قم بإلغاء التحليل واكتب "الأرقام غير واضحة".
+"""
     },
     'en': {
         'welcome': "Welcome to TradeGuard AI 📈\nChoose your language / اختر لغتك:",
         'lang_selected': "English selected successfully ✅\nSend any chart image now.",
-        'wait': '⏳ Extracting exact price axis data and analyzing market structure... Please wait.',
-        'no_trials_msg': '⚠️ **Trials Expired.**\n\nTop up your account to continue:\n🔹 **$20** (10 Days)\n🔹 **$50** (Monthly)\n\n📥 **USDT - TON Network:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt & ID `{user_id}` to:\n@TradeGuard_Admin',
+        'wait': '⏳ Scanning exact price coordinates and calculating realistic entry...',
+        'no_trials_msg': '⚠️ **Trials Expired.**\n\nTop up your account:\n🔹 **$20** (10 Days)\n🔹 **$50** (Monthly)\n\n📥 **USDT - TON Network:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt & ID `{user_id}` to:\n@TradeGuard_Admin',
         'account': '👤 **Account Details**\n\n🆔 ID: `{user_id}`\n📊 Trials: {trials}/3\n💎 Subscription: {sub_status}',
         'sub_info': '💎 **Subscriptions**\n\n🔹 **10-Day:** $20 (USDT)\n🔹 **Monthly:** $50 (USDT)\n\n📥 **USDT - TON Network:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Contact Admin:\n@TradeGuard_Admin',
         'active': 'Active ✅ (Ends: {end})',
@@ -152,38 +141,29 @@ TEXTS = {
         'btn_acc': '👤 Account',
         'btn_sub': '💎 Subscription',
         'activate_success_user': '🎉 **Subscription Activated!**\n\nValid until: `{end_date}`. Enjoy! 📈',
-        'prompt': """You are an Institutional Trading Expert (Price Action & Smart Money Concepts).
-Analyze the chart image strictly based on VISIBLE visual data. Do not hallucinate prices.
+        'prompt': """You are a strict Mathematical Trading Computer. Your job is to extract exact visual coordinates and provide a real-time setup. No guessing. No far-away limit orders.
 
-Strict Rules:
-1. First, OCR the Pair name, Timeframe, Current Price, and Visible Y-axis price range.
-2. All entry, SL, and TP levels MUST be extracted from the visible Y-axis range.
-
-If not a valid trading chart or numbers are unreadable, reply ONLY: "⚠️ Not a valid or clear trading chart."
+Strict Protocol:
+1. Identify the Current Price (CP) exactly as shown on the horizontal line.
+2. The Entry Price MUST BE equal to the Current Price (Market Execution) or extremely close to it. Do NOT suggest an entry 50 pips away!
+3. SL and TP must be realistic numbers visible on the Y-axis range. 
 
 Output format:
 
-1. 📌 Extracted Chart Info:
-- Asset/Pair: [Exact pair]
-- Timeframe: [Exact TF]
-- Current Price: [Exact Price]
+1. 📌 Price Verification:
+- Asset: [Pair Name]
+- Exact Current Price: [Price]
+- Visible Y-Axis Range: [Min] to [Max]
 
-2. 📊 Trend & Structure:
-- Main Trend: (Bullish/Bearish/Ranging)
-- Context: (Brief explanation)
+2. 🚧 Key Levels (From Chart):
+- Nearest Resistance: [Price]
+- Nearest Support: [Price]
 
-3. 🚧 Key Levels (From Y-axis):
-- Resistance: (Exact Price + Reason)
-- Support: (Exact Price + Reason)
-
-4. 🎯 Precise Setup:
+3. 🎯 Immediate Setup (Market Execution):
 - Decision: (Buy/Sell/Wait)
-- Entry Price: (Exact level)
-- Stop Loss (SL): (Strict level)
-- Take Profit 1 (TP1): (Price)
-- Take Profit 2 (TP2): (Price)
-
-5. 📈 Probability: (%)"""
+- Entry Price: (MUST match Current Price closely)
+- Stop Loss (SL): (Logical level based on visible structure)
+- Take Profit (TP): (Logical level within visible range)"""
     }
 }
 
@@ -205,7 +185,6 @@ def prepare_image(img_bytes):
     img = Image.open(BytesIO(img_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
-    # رفع دقة الصورة إلى 1800 لمنع تشويه الأرقام الدقيقة على محاور الشارت
     max_dim = 1800
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
@@ -214,9 +193,7 @@ def prepare_image(img_bytes):
 def generate_chart_analysis(prompt, img):
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        logger.info(f"Available models found: {available_models}")
-    except Exception as e:
-        logger.warning(f"Could not list models dynamically: {e}")
+    except Exception:
         available_models = []
 
     priority_candidates = [
@@ -243,7 +220,6 @@ def generate_chart_analysis(prompt, img):
     last_error = None
     for model_name in candidate_models:
         try:
-            logger.info(f"Trying model: {model_name}")
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(
                 [prompt, img], 
@@ -254,7 +230,6 @@ def generate_chart_analysis(prompt, img):
                 return response.text
         except Exception as e:
             err_str = str(e).lower()
-            logger.warning(f"Model {model_name} failed: {e}")
             last_error = e
             if "429" in err_str or "quota" in err_str:
                 time.sleep(2)
@@ -265,7 +240,6 @@ def generate_chart_analysis(prompt, img):
         
     raise Exception(f"API Error: All models failed. Last error: {last_error}")
 
-# === الأوامر والمعالجات ===
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     get_user(message.chat.id)
@@ -321,24 +295,20 @@ def admin_activate(message):
         start_date = datetime.datetime.now(tz).date()
         end_date = start_date + datetime.timedelta(days=days)
         
-        target_user = get_user(target_user_id)
-        target_lang = target_user[1] if target_user[1] in TEXTS else 'ar'
-        
         update_user(target_user_id, 'is_sub', 1)
         update_user(target_user_id, 'start_date', start_date.strftime('%Y-%m-%d'))
         update_user(target_user_id, 'end_date', end_date.strftime('%Y-%m-%d'))
         update_user(target_user_id, 'trials', 0)
         
         bot.reply_to(message, f"✅ **تم التفعيل بنجاح!**\n👤 المستخدم: `{target_user_id}`\n📅 الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
-        user_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
-        bot.send_message(target_user_id, user_msg, parse_mode='Markdown', reply_markup=get_main_keyboard(target_lang))
+        user_msg = TEXTS['ar']['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
+        bot.send_message(target_user_id, user_msg, parse_mode='Markdown')
     except:
         bot.reply_to(message, f"❌ استخدم الصيغة `/activate <USER_ID> <DAYS>`")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ مفتاح الـ API غير مضاف.")
         return
 
     user = get_user(message.chat.id)
@@ -368,23 +338,18 @@ def handle_photo(message):
         img = prepare_image(downloaded_file)
         
         analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
-        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result)
+        safe_send_long_text(message.chat.id, status_message_id=status_msg.message_id, full_text=analysis_result)
         
         if not is_sub:
             update_user(message.chat.id, 'trials', trials + 1)
 
     except Exception as e:
-        logger.error(f"Error during analysis: {traceback.format_exc()}")
-        if "QUOTA_EXCEEDED" in str(e):
-            err_text = "⚠️ وصلت لـ الحد الأقصى المجاني من جوجل في الدقيقة. يرجى الانتظار دقيقة وإعادة إرسال الصورة."
-        else:
-            err_text = "❌ حدث خطأ في الاتصال بالذكاء الاصطناعي، يرجى إعادة المحاولة."
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=err_text)
+        logger.error(f"Error: {traceback.format_exc()}")
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ، يرجى إعادة المحاولة.")
 
-# === تشغيل السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V16.0 - Fully Validated Active!"
+    return "TradeGuard AI Active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -393,8 +358,8 @@ def webhook():
             json_string = request.get_data().decode('utf-8')
             update = telebot.types.Update.de_json(json_string)
             threading.Thread(target=bot.process_new_updates, args=([update],)).start()
-        except Exception as e:
-            logger.error(f"Webhook Error: {e}")
+        except Exception:
+            pass
         return "OK", 200
     return "Forbidden", 1024
 
