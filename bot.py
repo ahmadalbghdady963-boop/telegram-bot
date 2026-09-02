@@ -39,12 +39,12 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# ضبط دقة الذكاء الاصطناعي مع رفع الحد الأقصى للنص لمنع قطع الرسالة نهائياً
+# ضبط دقة الذكاء الاصطناعي
 ANALYTICAL_GEN_CONFIG = GenerationConfig(
     temperature=0.1,
     top_p=0.9,
     top_k=40,
-    max_output_tokens=4096  # رفع السعة لمنع انقطاع النص
+    max_output_tokens=2048
 )
 
 # === تهيئة البوت والسيرفر ===
@@ -105,11 +105,11 @@ TEXTS = {
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
         'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال الآن ولغاية تاريخ: `{end_date}`.\nيمكنك الآن إرسال الشارتات بحرية تامة. بالتوفيق! 📈',
-        'prompt': """أنت خبير التداول الفني ومحلل هيكل السوق (Institutional Price Action Expert). مهمتك فحص الشارت المرفق بمنتهى الدقة والصرامة وإعطاء خطة تداول متكاملة لا توجد فيها أي نواقص.
+        'prompt': """أنت خبير التداول الفني ومحلل هيكل السوق (Institutional Price Action Expert). مهمتك فحص الشارت المرفق بمنتهى الدقة والصرامة وإعطاء خطة تداول متكاملة.
 
 إذا لم تكن الصورة لشارت تداول مالي يحتوي شموعاً يابانية ومحور أسعار، اكتب فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
 
-إذا كان الشارت صحيحاً، اكتب الرد باللغة العربية فقط، بأسلوب مباشر، احترافي، وملتزماً تماماً بالهيكل التالي بدقة تامة دون أي اختصار أو قطع:
+إذا كان الشارت صحيحاً، اكتب الرد باللغة العربية فقط، بأسلوب مباشر واحترافي بالهيكل التالي:
 
 1. 📊 الاتجاه العام وهيكل السوق:
 - الاتجاه: (صاعد / هابط / عرضي)
@@ -119,16 +119,16 @@ TEXTS = {
 - أقوى مقاومة: (السعر بدقة من المحور الأيمن + السبب)
 - أقوى دعم: (السعر بدقة من المحور الأيمن + السبب)
 
-3. 🎯 خطة التداول الاحترافية (إلزامي ملء كل الحقول بدقة):
+3. 🎯 خطة التداول الاحترافية:
 - القرار: (شراء / بيع / انتظار)
 - نقطة الدخول (Entry): (السعر المحدد بدقة)
 - وقف الخسارة (SL): (مستوى سعري صارم)
 - الهدف الأول (TP1): (السعر المستهدف الأول)
 - الهدف الثاني (TP2): (السعر المستهدف الثاني)
-- الهدف الثالث (TP3): (السعر المستهدف الثالث للمديات الأوسع)
+- الهدف الثالث (TP3): (السعر المستهدف الثالث)
 
 4. 📈 نسبة نجاح التوقع:
-- (نسبة مئوية واضحة ومدروسة تعكس قوة الفرصة الفنية)
+- (نسبة مئوية واضحة ومدروسة)
 
 ⚠️ تنبيه المخاطر: التزم دائماً بوقف الخسارة."""
     },
@@ -144,21 +144,21 @@ TEXTS = {
         'btn_acc': '👤 My Account',
         'btn_sub': '💎 Subscription',
         'activate_success_user': '🎉 **Subscription Activated!**\n\nActive until: `{end_date}`.\nEnjoy unlimited chart analysis! 📈',
-        'prompt': """You are an Institutional Price Action Expert. Analyze the attached trading chart with extreme rigor and provide a complete trading plan without any omissions.
+        'prompt': """You are an Institutional Price Action Expert. Analyze the attached trading chart with extreme rigor.
 
 If the image is not a candlestick chart with a price axis, reply ONLY: "⚠️ Sorry, this image is not a candlestick chart."
 
-If valid, output ONLY in English using this exact structure with zero preamble:
+If valid, output ONLY in English using this exact structure:
 
 1. 📊 Market Trend & Structure:
 - Trend: (Bullish / Bearish / Ranging)
-- Description: (Brief context of price action)
+- Description: (Brief context)
 
 2. 🚧 Key Levels:
 - Major Resistance: (Exact price + Reason)
 - Major Support: (Exact price + Reason)
 
-3. 🎯 Professional Trading Setup (Mandatory to fill all fields):
+3. 🎯 Professional Trading Setup:
 - Decision: (Buy / Sell / Wait)
 - Entry Price: (Exact entry level)
 - Stop Loss (SL): (Strict protective level)
@@ -167,7 +167,7 @@ If valid, output ONLY in English using this exact structure with zero preamble:
 - Take Profit 3 (TP3): (Extended target)
 
 4. 📈 Probability of Success:
-- (Percentage based on technical strength)
+- (Percentage value)
 
 ⚠️ Risk Warning: Always strictly enforce Stop Loss."""
     }
@@ -178,33 +178,31 @@ def get_main_keyboard(lang):
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
 
-def clean_analysis_output(text, target_lang):
-    if not text: return text
-    return text.strip()
-
 def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar'):
-    full_text = clean_analysis_output(full_text, target_lang)
     try:
-        bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=full_text, parse_mode='Markdown')
-    except Exception as e:
+        bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=full_text.strip(), parse_mode='Markdown')
+    except Exception:
         try:
-            bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=full_text, parse_mode=None)
+            bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=full_text.strip(), parse_mode=None)
         except Exception:
             pass
 
+# دالة تجهيز وضغط الصورة لتقليل استهلاك الكوتا
+def prepare_image(img_bytes):
+    img = Image.open(BytesIO(img_bytes))
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    max_dim = 1024
+    if max(img.size) > max_dim:
+        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+    return img
+
 def generate_chart_analysis(prompt, img):
-    available_models = []
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-    except:
-        available_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash']
-
-    if not available_models:
-        raise Exception("لا يوجد نموذج ذكاء اصطناعي متاح.")
-
-    for model_name in available_models:
+    # استخدام نماذج Flash المباشرة للحد من تجاوز الكوتا
+    candidate_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'gemini-1.5-flash']
+    
+    last_error = None
+    for model_name in candidate_models:
         try:
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(
@@ -216,8 +214,13 @@ def generate_chart_analysis(prompt, img):
                 return response.text
         except Exception as e:
             logger.warning(f"Model {model_name} failed: {e}")
+            last_error = e
+            if "429" in str(e) or "quota" in str(e).lower():
+                time.sleep(2)
             continue
             
+    if last_error and ("429" in str(last_error) or "quota" in str(last_error).lower()):
+        raise Exception("QUOTA_EXCEEDED")
     raise Exception("تعذر تحليل الصورة حالياً، يرجى إعادة المحاولة.")
 
 # === الأوامر والمعالجات ===
@@ -323,7 +326,9 @@ def handle_photo(message):
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        img = Image.open(BytesIO(downloaded_file))
+        
+        # ضغط الصورة لتوفير الكوتا والتوكينات
+        img = prepare_image(downloaded_file)
         
         analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
         safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
@@ -333,12 +338,16 @@ def handle_photo(message):
 
     except Exception as e:
         logger.error(f"Error: {traceback.format_exc()}")
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=f"❌ تعذر استكمال التحليل بسبب ضغط الشبكة، يرجى إعادة المحاولة.")
+        if "QUOTA_EXCEEDED" in str(e):
+            err_text = "⚠️ وصل الحساب المجاني للحد الأقصى من الطلبات المسموح بها في الدقيقة. يرجى الانتظار 30 ثانية وإعادة إرسال الصورة."
+        else:
+            err_text = "❌ تعذر استكمال التحليل بسبب ضغط الشبكة، يرجى إعادة المحاولة."
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=err_text)
 
 # === تشغيل السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V13.0 Full Analytical Setup Active!"
+    return "TradeGuard AI V14.0 Quota-Optimized Active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
