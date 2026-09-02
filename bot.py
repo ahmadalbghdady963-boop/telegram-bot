@@ -248,7 +248,7 @@ def generate_chart_analysis(prompt, img):
                 time.sleep(2)
             continue
             
-    if last_error and ("429" in str(last_error) or "quota" in str(last_error).lower()):
+    if last_error and ("1024" in str(last_error) or "quota" in str(last_error).lower()):
         raise Exception("QUOTA_EXCEEDED")
         
     raise Exception(f"API Error. Please try again.")
@@ -384,7 +384,7 @@ def webhook():
         except Exception as e:
             logger.error(f"Webhook Error: {e}")
         return "OK", 200
-    return "Forbidden", 403
+    return "Forbidden", 1024
 
 if __name__ == "__main__":
     bot.remove_webhook()
