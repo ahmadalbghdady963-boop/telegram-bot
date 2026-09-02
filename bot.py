@@ -6,6 +6,7 @@ import pytz
 import logging
 import traceback
 import re
+import threading  # تم إضافتها لمعالجة الطلبات في الخلفية ومشاركتها مع Flask
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask, request
@@ -76,7 +77,7 @@ def update_user(user_id, field, value):
     conn.commit()
     conn.close()
 
-# === نصوص وقوالب اللغات والتحليل المتقدم (Forex & Market Intelligence) ===
+# === نصوص وقوالب اللغات والتحليل الفني (دون تعديل) ===
 TEXTS = {
     'ar': {
         'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي لتحليل الأسواق المالية والفوركس بأعلى دقة مؤسسية.\n\nالرجاء اختيار لغتك / Choose your language:",
@@ -167,7 +168,7 @@ def get_main_keyboard(lang):
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
 
-# === تنظيف وتقليم مخرجات الذكاء الاصطناعي لمنع تكرار اللغات والأفكار ===
+# === تنظيف وتقليم مخرجات الذكاء الاصطناعي ===
 def clean_analysis_output(text, target_lang):
     if not text:
         return text
@@ -220,7 +221,7 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === توليد التحليل الفني باحترافية تامة ===
+# === توليد التحليل الفني ===
 def generate_chart_analysis(prompt, img):
     available_models = []
     try:
@@ -246,7 +247,7 @@ def generate_chart_analysis(prompt, img):
 
     raise Exception("تعذر تحليل الصورة، يرجى التأكد من وضوح الشارت والمحاولة لاحقاً.")
 
-# === الأوامر والمعالجات الأساسية ===
+# === الأوامر والمعالجات ===
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -308,7 +309,7 @@ def admin_activate(message):
     except Exception as e:
         bot.reply_to(message, f"❌ خطأ: استخدم الصيغة الصحيحة تماماً:\n`/activate <USER_ID> <DAYS>`")
 
-# معالج الصور والتحليل المالي المتطور
+# معالج الصور والتحليل الفني
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     if not GEMINI_API_KEY:
@@ -349,7 +350,7 @@ def handle_photo(message):
         logger.error(f"Error: {traceback.format_exc()}")
         safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
 
-# === تشغيل السيرفر وواجهة الويب (Flask Webhook) ===
+# === تشغيل السيرفر والـ Webhook (تم التعديل هنا فقط لحل مشكلة التكرار والـ Timeout) ===
 @app.route('/', methods=['GET'])
 def home():
     return "TradeGuard AI Pro V11.0 Active & Operational!"
@@ -360,7 +361,8 @@ def webhook():
         try:
             json_string = request.get_data().decode('utf-8')
             update = telebot.types.Update.de_json(json_string)
-            bot.process_new_updates([update])
+            # تشغيل معالجة التحديث في خيط خلفي منعاً لطلب إعادة الإرسال من تليجرام
+            threading.Thread(target=bot.process_new_updates, args=([update],)).start()
         except Exception as e:
             logger.error(f"Webhook Error: {e}")
         return "OK", 200
