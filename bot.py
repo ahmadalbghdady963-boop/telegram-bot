@@ -250,3 +250,144 @@ def generate_chart_analysis(prompt, img):
         raise Exception("QUOTA_EXCEEDED")
         
     raise Exception(f"API Error: All models failed. Last error: {last_error}")
+
+# === الأوامر والمعالجات ===
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    get_user(message.chat.id)
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"), 
+               InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"))
+    bot.reply_to(message, TEXTS['ar']['welcome'], reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
+def set_language(call):
+    lang = call.data.split('_')[1]
+    update_user(call.message.chat.id, 'lang', lang)
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    bot.send_message(call.message.chat.id, TEXTS[lang]['lang_selected'], reply_markup=get_main_keyboard(lang))
+
+@bot.message_handler(func=lambda m: m.text and ('حسابي' in m.text or 'Account' in m.text or m.text == '/my_account'))
+def account_info(message):
+    user = get_user(message.chat.id)
+    lang, trials, is_sub, end_date_str = user[1], user[2], user[3], user[5]
+    if lang not in TEXTS: lang = 'ar'
+    
+    if is_sub:
+        tz = pytz.timezone('Asia/Riyadh')
+        today_date = datetime.datetime.now(tz).date()
+        try:
+            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            if today_date > end_date:
+                is_sub = 0
+                update_user(message.chat.id, 'is_sub', 0)
+        except:
+            pass
+
+    sub_status = TEXTS[lang]['active'].format(end=end_date_str) if is_sub else TEXTS[lang]['inactive']
+    msg = TEXTS[lang]['account'].format(user_id=message.chat.id, trials=trials, sub_status=sub_status)
+    bot.reply_to(message, msg, parse_mode='Markdown')
+
+@bot.message_handler(func=lambda m: m.text and ('الاشتراك' in m.text or 'Subscription' in m.text or m.text == '/subscribe'))
+def sub_info(message):
+    user = get_user(message.chat.id)
+    lang = user[1] if user[1] in TEXTS else 'ar'
+    bot.reply_to(message, TEXTS[lang]['sub_info'].format(user_id=message.chat.id), parse_mode='Markdown')
+
+@bot.message_handler(commands=['activate'])
+def admin_activate(message):
+    if str(message.chat.id) != str(ADMIN_ID):
+        return 
+    try:
+        parts = message.text.split()
+        target_user_id = int(parts[1])
+        days = int(parts[2])
+        
+        tz = pytz.timezone('Asia/Riyadh')
+        start_date = datetime.datetime.now(tz).date()
+        end_date = start_date + datetime.timedelta(days=days)
+        
+        target_user = get_user(target_user_id)
+        target_lang = target_user[1] if target_user[1] in TEXTS else 'ar'
+        
+        update_user(target_user_id, 'is_sub', 1)
+        update_user(target_user_id, 'start_date', start_date.strftime('%Y-%m-%d'))
+        update_user(target_user_id, 'end_date', end_date.strftime('%Y-%m-%d'))
+        update_user(target_user_id, 'trials', 0)
+        
+        bot.reply_to(message, f"✅ **تم التفعيل بنجاح!**\n👤 المستخدم: `{target_user_id}`\n📅 الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
+        user_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
+        bot.send_message(target_user_id, user_msg, parse_mode='Markdown', reply_markup=get_main_keyboard(target_lang))
+    except:
+        bot.reply_to(message, f"❌ استخدم الصيغة `/activate <USER_ID> <DAYS>`")
+
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    if not GEMINI_API_KEY:
+        bot.reply_to(message, "❌ مفتاح الـ API غير مضاف.")
+        return
+
+    user = get_user(message.chat.id)
+    lang = user[1] if user[1] in TEXTS else 'ar'
+    trials, is_sub, end_date_str = user[2], user[3], user[5]
+    
+    if is_sub:
+        tz = pytz.timezone('Asia/Riyadh')
+        today_date = datetime.datetime.now(tz).date()
+        try:
+            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            if today_date > end_date:
+                update_user(message.chat.id, 'is_sub', 0)
+                is_sub = 0
+        except:
+            pass
+
+    if not is_sub and trials >= 3:
+        bot.reply_to(message, TEXTS[lang]['no_trials_msg'].format(user_id=message.chat.id), parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        return
+
+    status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
+    
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        img = prepare_image(downloaded_file)
+        
+        analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
+        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result)
+        
+        if not is_sub:
+            update_user(message.chat.id, 'trials', trials + 1)
+
+    except Exception as e:
+        logger.error(f"Error during analysis: {traceback.format_exc()}")
+        if "QUOTA_EXCEEDED" in str(e):
+            err_text = "⚠️ وصلت لـ الحد الأقصى المجاني من جوجل في الدقيقة. يرجى الانتظار دقيقة وإعادة إرسال الصورة."
+        else:
+            err_text = "❌ حدث خطأ في الاتصال بالذكاء الاصطناعي، يرجى إعادة المحاولة."
+        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=err_text)
+
+# === تشغيل السيرفر ===
+@app.route('/', methods=['GET'])
+def home():
+    return "TradeGuard AI V16.0 - Fully Validated Active!"
+
+@app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        try:
+            json_string = request.get_data().decode('utf-8')
+            update = telebot.types.Update.de_json(json_string)
+            threading.Thread(target=bot.process_new_updates, args=([update],)).start()
+        except Exception as e:
+            logger.error(f"Webhook Error: {e}")
+        return "OK", 200
+    return "Forbidden", 1024
+
+if __name__ == "__main__":
+    bot.remove_webhook()
+    time.sleep(1) 
+    if RENDER_URL:
+        bot.set_webhook(url=f"{RENDER_URL.rstrip('/')}/{TELEGRAM_TOKEN}")
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, threaded=True)
