@@ -38,11 +38,11 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# ضبط دقة الذكاء الاصطناعي
+# ضبط دقة الذكاء الاصطناعي الصارمة (صفر تخمين)
 ANALYTICAL_GEN_CONFIG = GenerationConfig(
-    temperature=0.1,
-    top_p=0.9,
-    top_k=40,
+    temperature=0.0,
+    top_p=0.1,
+    top_k=1,
     max_output_tokens=2048
 )
 
@@ -90,12 +90,12 @@ def update_user(user_id, field, value):
     finally:
         conn.close()
 
-# === نصوص وقوالب اللغات ===
+# === نصوص وقوالب اللغات المحسنة بدقة واقعية ===
 TEXTS = {
     'ar': {
         'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي والاحترافي لتحليل الشارتات المالية.\n\nالرجاء اختيار لغتك / Choose your language:",
         'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي صورة لشارت مالي للتحليل المؤسسي الآن.",
-        'wait': '⏳ جاري فحص هيكل السوق وتجهيز خطة التداول الشاملة... برجاء الانتظار.',
+        'wait': '⏳ جاري مسح محاور الشارت وهيكل السوق وتجهيز التقرير الواقعي... برجاء الانتظار.',
         'no_trials_msg': '⚠️ **لقد تم إنهاء محاولاتك المجانية.**\n\nللاستمرار في الاستفادة من تحليلات الذكاء الاصطناعي، رجاءً شحن حسابك:\n🔹 **20 دولار** (10 أيام)\n🔹 **50 دولار** (شهري)\n\n📥 **عنوان الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل أرسل صورة التحويل والـ ID `{user_id}` إلى:\n@TradeGuard_Admin',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
         'sub_info': '💎 **باقات الاشتراك**\n\n🔹 **10 أيام:** 20 دولار (USDT)\n🔹 **شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل راسل:\n@TradeGuard_Admin',
@@ -104,36 +104,46 @@ TEXTS = {
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
         'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nصالح لغاية: `{end_date}`.\nيمكنك الآن إرسال الشارتات بحرية. بالتوفيق! 📈',
-        'prompt': """أنت خبير تداول مؤسسي (Smart Money & Price Action). افحص الشارت بدقة. 
-إذا لم تكن الصورة لشارت تداول، اكتب فقط: "⚠️ الصورة لا تطابق شارت تداول."
+        'prompt': """أنت محرر ومحلل مالي مؤسسي احترافي وخبير في قراءة الشارتات (Price Action & Smart Money Concepts).
+مهمتك تقديم تحليل دقيق ومستخرج 100% من البيانات البصرية الظاهرة في الصورة دون أي فرضيات أو أرقام من خيالك.
 
-إذا كان شارتاً، اكتب تحليلاً باللغة العربية حصراً، بأسلوب مباشر دون مقدمات، ويجب أن يملأ كل النقاط التالية بدقة:
+قواعد واستخراج البيانات الإجباري (OCR Protocol):
+1. افحص الصورة واقرأ اسم الزوج/السهم، الإطار الزمني، والسعر الحالي الظاهر خطياً أو على محور الأسعار الأيمن.
+2. حدد أدنى سعر وأعلى سعر ظاهرين على المحور العمودي الأيمن.
+3. يمنع منعاً باتاً اقتراح أي أسعار للتداول خارج النطاق السعري المرئي في الصورة.
 
-1. 📊 الاتجاه وهيكل السوق:
-- الاتجاه العام: (صاعد/هابط/عرضي)
-- التوصيف: (شرح مختصر لحركة السعر)
+إذا لم تكن الصورة لشارت تداول واضح أو أرقامه غير مقروءة، اكتب فقط: "⚠️ الصورة لا تحتوي على شارت تداول واضح أو أن الأرقام غير جليّة."
 
-2. 🚧 المستويات المفتاحية:
-- مقاومة رئيسية: (السعر بدقة + السبب)
-- دعم رئيسي: (السعر بدقة + السبب)
+إذا كان شارتاً واضحاً، اكتب التقرير باللغة العربية بأسلوب مباشر ومطابق تماماً لهذا التنسيق:
 
-3. 🎯 خطة التداول الشاملة:
+1. 📌 بيانات الشارت الفعلي:
+- الأداة / الزوج: [اكتب اسم الزوج الظاهر بدقة، مثلاً AUDUSD]
+- الإطار الزمني: [اكتب الفريم الظاهر، مثلاً M15]
+- السعر الحالي: [اكتب السعر الحالي الظاهر بدقة من المحور]
+
+2. 📊 الاتجاه وهيكل السوق (Structure):
+- الاتجاه العام: (صاعد / هابط / عرضي)
+- توصيف الحركة: (شرح مختصر ومباشر للشموع الأخيرة والسلوك السعري)
+
+3. 🚧 المستويات المفتاحية (من المحور العمودي حصراً):
+- مقاومة رئيسية: (السعر الدقيق + السبب)
+- دعم رئيسي: (السعر الدقيق + السبب)
+
+4. 🎯 خطة التداول الحقيقية (Real Trade Setup):
 - القرار: (شراء / بيع / انتظار)
-- نقطة الدخول (Entry): (مستوى سعري محدد)
-- وقف الخسارة (SL): (مستوى حماية صارم)
-- الهدف الأول (TP1): (السعر)
-- الهدف الثاني (TP2): (السعر)
-- الهدف الثالث (TP3): (السعر الأبعد)
+- نقطة الدخول (Entry): (مستوى سعري دقيق موجود بالنطاق المرئي)
+- وقف الخسارة (SL): (مستوى حماية دقيق)
+- Target 1 (TP1): (السعر)
+- Target 2 (TP2): (السعر)
 
-4. 📈 نسبة نجاح الفرصة:
-- (النسبة المئوية %)
+5. 📈 نسبة نجاح الصفقة: (نسبة مئوية بناءً على قوة النموذج)
 
-⚠️ تذكير: التزم دائماً بوقف الخسارة."""
+⚠️ تذكير: الالتزام الصارم بوقف الخسارة وإدارة المخاطر."""
     },
     'en': {
         'welcome': "Welcome to TradeGuard AI 📈\nChoose your language / اختر لغتك:",
         'lang_selected': "English selected successfully ✅\nSend any chart image now.",
-        'wait': '⏳ Analyzing market structure and preparing trading setup... Please wait.',
+        'wait': '⏳ Extracting exact price axis data and analyzing market structure... Please wait.',
         'no_trials_msg': '⚠️ **Trials Expired.**\n\nTop up your account to continue:\n🔹 **$20** (10 Days)\n🔹 **$50** (Monthly)\n\n📥 **USDT - TON Network:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt & ID `{user_id}` to:\n@TradeGuard_Admin',
         'account': '👤 **Account Details**\n\n🆔 ID: `{user_id}`\n📊 Trials: {trials}/3\n💎 Subscription: {sub_status}',
         'sub_info': '💎 **Subscriptions**\n\n🔹 **10-Day:** $20 (USDT)\n🔹 **Monthly:** $50 (USDT)\n\n📥 **USDT - TON Network:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Contact Admin:\n@TradeGuard_Admin',
@@ -142,31 +152,38 @@ TEXTS = {
         'btn_acc': '👤 Account',
         'btn_sub': '💎 Subscription',
         'activate_success_user': '🎉 **Subscription Activated!**\n\nValid until: `{end_date}`. Enjoy! 📈',
-        'prompt': """You are an Institutional Trading Expert. Analyze the chart.
-If not a chart, reply ONLY: "⚠️ Not a valid trading chart."
+        'prompt': """You are an Institutional Trading Expert (Price Action & Smart Money Concepts).
+Analyze the chart image strictly based on VISIBLE visual data. Do not hallucinate prices.
 
-If valid, output ONLY in English using this exact structure:
+Strict Rules:
+1. First, OCR the Pair name, Timeframe, Current Price, and Visible Y-axis price range.
+2. All entry, SL, and TP levels MUST be extracted from the visible Y-axis range.
 
-1. 📊 Trend & Structure:
+If not a valid trading chart or numbers are unreadable, reply ONLY: "⚠️ Not a valid or clear trading chart."
+
+Output format:
+
+1. 📌 Extracted Chart Info:
+- Asset/Pair: [Exact pair]
+- Timeframe: [Exact TF]
+- Current Price: [Exact Price]
+
+2. 📊 Trend & Structure:
 - Main Trend: (Bullish/Bearish/Ranging)
 - Context: (Brief explanation)
 
-2. 🚧 Key Levels:
-- Major Resistance: (Price + Reason)
-- Major Support: (Price + Reason)
+3. 🚧 Key Levels (From Y-axis):
+- Resistance: (Exact Price + Reason)
+- Support: (Exact Price + Reason)
 
-3. 🎯 Comprehensive Trading Setup:
+4. 🎯 Precise Setup:
 - Decision: (Buy/Sell/Wait)
 - Entry Price: (Exact level)
 - Stop Loss (SL): (Strict level)
 - Take Profit 1 (TP1): (Price)
 - Take Profit 2 (TP2): (Price)
-- Take Profit 3 (TP3): (Extended Price)
 
-4. 📈 Setup Probability:
-- (Percentage %)
-
-⚠️ Risk Warning: Always enforce SL."""
+5. 📈 Probability: (%)"""
     }
 }
 
@@ -188,13 +205,13 @@ def prepare_image(img_bytes):
     img = Image.open(BytesIO(img_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
-    max_dim = 1024
+    # رفع دقة الصورة إلى 1800 لمنع تشويه الأرقام الدقيقة على محاور الشارت
+    max_dim = 1800
     if max(img.size) > max_dim:
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
     return img
 
 def generate_chart_analysis(prompt, img):
-    # الفحص التلقائي المستند إلى النماذج المتاحة حقيقةً في مكتبة جيميناي
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         logger.info(f"Available models found: {available_models}")
@@ -202,7 +219,6 @@ def generate_chart_analysis(prompt, img):
         logger.warning(f"Could not list models dynamically: {e}")
         available_models = []
 
-    # تم التحديث بناءً على سجلات السيرفر لتشمل نماذج الجيل الثالث المتاحة للمفاتيح الجديدة
     priority_candidates = [
         'gemini-3.7-flash',
         'gemini-3.5-flash',
@@ -216,10 +232,8 @@ def generate_chart_analysis(prompt, img):
         if any(m in am for am in available_models):
             candidate_models.append(m)
             
-    # إضافة أي نموذج فلاش أو برو متاح كاحتياطي
     for am in available_models:
         if am not in candidate_models and ('flash' in am or 'pro' in am):
-            # إزالة بادئة models/ لتجنب أخطاء التوجيه
             clean_name = am.replace('models/', '')
             candidate_models.append(clean_name)
 
