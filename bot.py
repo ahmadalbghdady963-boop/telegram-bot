@@ -1,93 +1,65 @@
 import os
-import time
-import sqlite3
-import datetime
-import pytz
-import logging
-import traceback
-import threading
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from flask import Flask, request
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold, GenerationConfig
-from io import BytesIO
-from PIL import Image
+import PIL.Image
+import io
+import sqlite3
+from datetime import datetime, timedelta
 
-# === إعداد نظام المراقبة ===
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# --- 1. إعداد المتغيرات البيئية والمفاتيح ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "ضع_توكن_التلغرام_هنا")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "ضع_مفتاح_جيميني_هنا")
 
-# === إعدادات النظام ===
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRAM_TOKEN') or os.environ.get('BOT_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
-ADMIN_ID = os.environ.get('ADMIN_ID', '0')
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+genai.configure(api_key=GEMINI_API_KEY)
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود.")
+# استخدام نموذج Gemini الداعم للرؤية (Vision)
+model = genai.GenerativeModel('gemini-1.5-pro')
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
-safety_settings = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-}
-
-# قفل التفكير العشوائي تماماً
-ANALYTICAL_GEN_CONFIG = GenerationConfig(
-    temperature=0.0,
-    top_p=0.0, # تقليل احتمالية اختيار كلمات غير متوقعة للصفر
-    top_k=1,
-    max_output_tokens=2048
-)
-
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
-app = Flask(__name__)
-
-def get_db_connection():
-    return sqlite3.connect('tradeguard.db', check_same_thread=False, timeout=20)
-
+# --- 2. إعداد قاعدة البيانات للمستخدمين ---
 def init_db():
-    conn = get_db_connection()
-    try:
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS users
-                     (user_id INTEGER PRIMARY KEY, lang TEXT, trials INTEGER, 
-                      is_sub INTEGER, start_date TEXT, end_date TEXT)''')
-        conn.commit()
-    finally:
-        conn.close()
+    conn = sqlite3.connect('tradeguard.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY, lang TEXT, trials INTEGER, sub_end_date TEXT)''')
+    conn.commit()
+    conn.close()
 
 init_db()
 
 def get_user(user_id):
-    conn = get_db_connection()
-    try:
+    conn = sqlite3.connect('tradeguard.db')
+    c = conn.cursor()
+    c.execute("SELECT lang, trials, sub_end_date FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {'lang': row[0], 'trials': row[1], 'sub_end': row[2]}
+    else:
+        # إنشاء مستخدم جديد بـ 3 محاولات مجانية
+        conn = sqlite3.connect('tradeguard.db')
         c = conn.cursor()
-        c.execute("SELECT user_id, lang, trials, is_sub, start_date, end_date FROM users WHERE user_id=?", (user_id,))
-        user = c.fetchone()
-        if not user:
-            c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", (user_id, 'ar', 0, 0, '', ''))
-            conn.commit()
-            user = (user_id, 'ar', 0, 0, '', '')
-        return user
-    finally:
-        conn.close()
-
-def update_user(user_id, field, value):
-    conn = get_db_connection()
-    try:
-        c = conn.cursor()
-        c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
+        c.execute("INSERT INTO users (user_id, lang, trials, sub_end_date) VALUES (?, ?, ?, ?)", 
+                  (user_id, 'ar', 3, None))
         conn.commit()
-    finally:
         conn.close()
+        return {'lang': 'ar', 'trials': 3, 'sub_end': None}
 
-# === الأوامر الصارمة الجديدة ===
+def update_user(user_id, **kwargs):
+    conn = sqlite3.connect('tradeguard.db')
+    c = conn.cursor()
+    for key, value in kwargs.items():
+        if key == 'lang':
+            c.execute("UPDATE users SET lang=? WHERE user_id=?", (value, user_id))
+        elif key == 'trials':
+            c.execute("UPDATE users SET trials=? WHERE user_id=?", (value, user_id))
+        elif key == 'sub_end':
+            c.execute("UPDATE users SET sub_end_date=? WHERE user_id=?", (value, user_id))
+    conn.commit()
+    conn.close()
+
+# --- 3. القاموس والنصوص (كما تم الاتفاق عليها) ---
 TEXTS = {
     'ar': {
         'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي والاحترافي لتحليل الشارتات المالية.\n\nالرجاء اختيار لغتك / Choose your language:",
@@ -101,33 +73,37 @@ TEXTS = {
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
         'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nصالح لغاية: `{end_date}`. بالتوفيق! 📈',
-        'prompt': """أنت نظام تدقيق رياضي وحاسوب تداول صارم. مهمتك قراءة الشارت المرفق واستخراج الأرقام الحقيقية الظاهرة فقط. 
-يمنع التخمين أو وضع نقاط دخول بعيدة. يجب أن تكون الأرقام متطابقة مع السعر الظاهر بدقة الفواصل العشرية.
+        'prompt': """أنت الآن خبير مالي مخضرم ونظام تدقيق رياضي وحاسوب تداول فائق الدقة، تفكيرك يتجاوز العقل البشري ويعتمد حصرياً على الحقائق والوقائع الرياضية المرئية في الصورة المرفقة فقط. يمنع منعاً باتاً إعطاء تحليلات كاذبة، افتراضية، أو تخمين أي أرقام غير موجودة في الشارت.
 
-البروتوكول الإجباري:
-1. اقرأ السعر الحالي (Current Price) المكتوب بجوار الخط الأفقي (مثال: في شارت الفضة هذا السعر هو 64.27).
-2. نقطة الدخول (Entry Price) **يجب أن تكون هي نفسها السعر الحالي** أو قريبة منه بحد أقصى خطوة عشرية واحدة. لا تعطي دخولاً يبعد 50 نقطة أبداً!
-3. يجب أن تكون جميع الأهداف (TP) ووقف الخسارة (SL) ضمن النطاق السعري المرئي على المحور الأيمن (Y-axis).
+البروتوكول الإجباري الصارم (نسبة الخطأ المسموح 0%):
+1. اقرأ السعر الحالي (Current Price) المكتوب بجوار الخط الأفقي بدقة مطلقة شاملة الفواصل العشرية.
+2. نقطة الدخول (Entry Price) يجب أن تكون مطابقة تماماً للسعر الحالي الظاهر في الشارت (تنفيذ فوري Market Execution). لا تقترح نقاط دخول بعيدة إطلاقاً.
+3. المستويات (دعم/مقاومة/أهداف/وقف خسارة) يجب أن تستخرج حصراً من النطاق السعري المرئي على المحور الأيمن (Y-axis). لا تخترع أرقاماً غير مرئية في الصورة.
+4. اعتمد "التحليل الذهبي" القائم على قراءة الشموع الواضحة والاتجاه الفعلي دون أي استنتاجات خيالية.
 
-أخرج التحليل بهذا التنسيق فقط:
+أخرج التحليل بهذا التنسيق فقط (بدون أي مقدمات أو إضافات):
 
-1. 📌 بيانات التدقيق السعري:
-- الأصل/الزوج: [اكتب اسم الزوج]
-- السعر الحالي الفعلي: [اكتب السعر الظاهر بدقة]
+1. 📌 بيانات التدقيق السعري (دقة 100%):
+- الأصل/الزوج: [استخرج اسم الزوج من الشارت]
+- السعر الحالي الفعلي: [السعر الظاهر بدقة]
 - النطاق السعري المرئي: من [أقل سعر بالصورة] إلى [أعلى سعر بالصورة]
 
-2. 🚧 المستويات المفتاحية:
-- أقرب مقاومة مرئية: (السعر الدقيق بناءً على الشموع السابقة)
-- أقرب دعم مرئي: (السعر الدقيق)
+2. 🚧 المستويات المفتاحية المرئية:
+- أقرب مقاومة مرئية: (السعر الدقيق للقمة السابقة المرئية)
+- أقرب دعم مرئي: (السعر الدقيق للقاع السابق المرئي)
 
 3. 🎯 التوصية المباشرة (Market Execution):
-- القرار: (شراء / بيع من السعر الحالي)
-- نقطة الدخول (Entry): (يجب أن تتطابق مع السعر الحالي أو تختلف بشكل طفيف جداً)
-- وقف الخسارة (SL): (رقم منطقي وقريب بناءً على الدعم/المقاومة المرئية)
-- الهدف (TP): (رقم منطقي داخل النطاق المرئي)
+- القرار: (شراء / بيع من السعر الحالي بناءً على حركة الشموع الأخيرة)
+- نقطة الدخول (Entry): (مطابقة للسعر الحالي المذكور في النقطة الأولى)
+- وقف الخسارة (SL): (رقم منطقي قريب لحماية رأس المال ويجب أن يكون داخل النطاق المرئي)
+- الهدف (TP): (رقم منطقي داخل النطاق المرئي ومبني على الدعم/المقاومة)
 
-⚠️ تنبيه للنظام: إذا كانت المسافة بين الدخول والسعر الحالي غير منطقية، قم بإلغاء التحليل واكتب "الأرقام غير واضحة".
-"""
+4. 💎 3 نقاط ذهبية مقترحة لتحقيق الربح الصحيح:
+- [نقطة 1: استراتيجية الدخول الفوري والتعامل مع السعر الحالي]
+- [نقطة 2: إدارة المخاطر وتأمين الصفقة (مثل حجز الأرباح أو نقل وقف الخسارة)]
+- [نقطة 3: كيفية تعظيم العائد بناءً على معطيات الشارت الحالية]
+
+⚠️ تنبيه حرج للنظام: أي تخمين أو إعطاء مسافة غير منطقية بين الدخول والسعر الحالي سيؤدي إلى تدمير التحليل. التزم بالواقع والأرقام الظاهرة فقط."""
     },
     'en': {
         'welcome': "Welcome to TradeGuard AI 📈\nChoose your language / اختر لغتك:",
@@ -141,232 +117,154 @@ TEXTS = {
         'btn_acc': '👤 Account',
         'btn_sub': '💎 Subscription',
         'activate_success_user': '🎉 **Subscription Activated!**\n\nValid until: `{end_date}`. Enjoy! 📈',
-        'prompt': """You are a strict Mathematical Trading Computer. Your job is to extract exact visual coordinates and provide a real-time setup. No guessing. No far-away limit orders.
+        'prompt': """You are a highly advanced financial expert and a strict mathematical trading computer. Your logic surpasses human emotion and relies exclusively on visible visual facts and mathematical realities in the provided chart. It is strictly forbidden to provide false, hypothetical, or guessed numbers not present on the chart.
 
-Strict Protocol:
-1. Identify the Current Price (CP) exactly as shown on the horizontal line.
-2. The Entry Price MUST BE equal to the Current Price (Market Execution) or extremely close to it. Do NOT suggest an entry 50 pips away!
-3. SL and TP must be realistic numbers visible on the Y-axis range. 
+Strict Protocol (0% Error Tolerance):
+1. Read the Current Price (CP) exactly as shown on the horizontal line, including decimals.
+2. The Entry Price MUST perfectly match the Current Price (Market Execution). NEVER suggest distant entry points.
+3. Levels (Support/Resistance/TP/SL) must be extracted exclusively from the visible price range on the Y-axis. Do not invent invisible numbers.
+4. Apply "Golden Analysis" based on clear candlestick reading and actual trend, without imaginary assumptions.
 
-Output format:
+Output format (No introductions, strict format only):
 
-1. 📌 Price Verification:
+1. 📌 Price Verification (100% Accuracy):
 - Asset: [Pair Name]
-- Exact Current Price: [Price]
+- Exact Current Price: [Visible Price]
 - Visible Y-Axis Range: [Min] to [Max]
 
-2. 🚧 Key Levels (From Chart):
-- Nearest Resistance: [Price]
-- Nearest Support: [Price]
+2. 🚧 Key Visual Levels:
+- Nearest Resistance: [Exact price of previous visible peak]
+- Nearest Support: [Exact price of previous visible trough]
 
 3. 🎯 Immediate Setup (Market Execution):
-- Decision: (Buy/Sell/Wait)
-- Entry Price: (MUST match Current Price closely)
-- Stop Loss (SL): (Logical level based on visible structure)
-- Take Profit (TP): (Logical level within visible range)"""
+- Decision: (Buy/Sell based on recent candles)
+- Entry Price: (MUST match Current Price exactly)
+- Stop Loss (SL): (Logical nearby level to protect capital, within visible range)
+- Take Profit (TP): (Logical level within visible range based on S/R)
+
+4. 💎 3 Golden Points for Correct Profit-Making:
+- [Point 1: Immediate entry strategy based on current price]
+- [Point 2: Risk management and securing the trade (e.g., trailing stop)]
+- [Point 3: Maximizing returns based on current chart data]
+
+⚠️ CRITICAL ALERT: Guessing or providing an illogical distance between Entry and Current Price is a system failure. Stick to reality and visible numbers only."""
     }
 }
 
-def get_main_keyboard(lang):
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
-    return markup
+# --- 4. دوال التلغرام (Handlers) ---
 
-def safe_send_long_text(chat_id, status_message_id, full_text):
-    try:
-        bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=full_text.strip(), parse_mode='Markdown')
-    except Exception:
-        try:
-            bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=full_text.strip(), parse_mode=None)
-        except Exception:
-            pass
-
-def prepare_image(img_bytes):
-    img = Image.open(BytesIO(img_bytes))
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-    max_dim = 1800
-    if max(img.size) > max_dim:
-        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-    return img
-
-def generate_chart_analysis(prompt, img):
-    try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    except Exception:
-        available_models = []
-
-    priority_candidates = [
-        'gemini-3.7-flash',
-        'gemini-3.5-flash',
-        'gemini-3.1-pro-preview',
-        'gemini-flash-latest',
-        'gemini-pro-latest'
-    ]
-    
-    candidate_models = []
-    for m in priority_candidates:
-        if any(m in am for am in available_models):
-            candidate_models.append(m)
-            
-    for am in available_models:
-        if am not in candidate_models and ('flash' in am or 'pro' in am):
-            clean_name = am.replace('models/', '')
-            candidate_models.append(clean_name)
-
-    if not candidate_models:
-        candidate_models = ['gemini-3.5-flash', 'gemini-3.1-pro-preview']
-
-    last_error = None
-    for model_name in candidate_models:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(
-                [prompt, img], 
-                generation_config=ANALYTICAL_GEN_CONFIG,
-                safety_settings=safety_settings
-            )
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            err_str = str(e).lower()
-            last_error = e
-            if "429" in err_str or "quota" in err_str:
-                time.sleep(2)
-            continue
-            
-    if last_error and ("1024" in str(last_error) or "quota" in str(last_error).lower()):
-        raise Exception("QUOTA_EXCEEDED")
-        
-    raise Exception(f"API Error: All models failed. Last error: {last_error}")
-
+# قائمة البداية واختيار اللغة
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    get_user(message.chat.id)
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"), 
-               InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"))
-    bot.reply_to(message, TEXTS['ar']['welcome'], reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
-def set_language(call):
-    lang = call.data.split('_')[1]
-    update_user(call.message.chat.id, 'lang', lang)
-    bot.delete_message(call.message.chat.id, call.message.message_id)
-    bot.send_message(call.message.chat.id, TEXTS[lang]['lang_selected'], reply_markup=get_main_keyboard(lang))
-
-@bot.message_handler(func=lambda m: m.text and ('حسابي' in m.text or 'Account' in m.text or m.text == '/my_account'))
-def account_info(message):
-    user = get_user(message.chat.id)
-    lang, trials, is_sub, end_date_str = user[1], user[2], user[3], user[5]
-    if lang not in TEXTS: lang = 'ar'
+    user_id = message.from_user.id
+    get_user(user_id) # لضمان تسجيل المستخدم
     
-    if is_sub:
-        tz = pytz.timezone('Asia/Riyadh')
-        today_date = datetime.datetime.now(tz).date()
-        try:
-            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').date()
-            if today_date > end_date:
-                is_sub = 0
-                update_user(message.chat.id, 'is_sub', 0)
-        except:
-            pass
+    markup = InlineKeyboardMarkup()
+    markup.row_width = 2
+    markup.add(
+        InlineKeyboardButton("العربية 🇸🇦", callback_data="lang_ar"),
+        InlineKeyboardButton("English 🇬🇧", callback_data="lang_en")
+    )
+    bot.send_message(message.chat.id, TEXTS['ar']['welcome'], reply_markup=markup)
 
-    sub_status = TEXTS[lang]['active'].format(end=end_date_str) if is_sub else TEXTS[lang]['inactive']
-    msg = TEXTS[lang]['account'].format(user_id=message.chat.id, trials=trials, sub_status=sub_status)
-    bot.reply_to(message, msg, parse_mode='Markdown')
+# التعامل مع أزرار اللغة
+@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
+def callback_query(call):
+    user_id = call.from_user.id
+    selected_lang = call.data.split('_')[1]
+    
+    update_user(user_id, lang=selected_lang)
+    
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(chat_id=call.message.chat.id, 
+                          message_id=call.message.message_id, 
+                          text=TEXTS[selected_lang]['lang_selected'])
 
-@bot.message_handler(func=lambda m: m.text and ('الاشتراك' in m.text or 'Subscription' in m.text or m.text == '/subscribe'))
-def sub_info(message):
-    user = get_user(message.chat.id)
-    lang = user[1] if user[1] in TEXTS else 'ar'
-    bot.reply_to(message, TEXTS[lang]['sub_info'].format(user_id=message.chat.id), parse_mode='Markdown')
+# عرض الحساب
+@bot.message_handler(commands=['account'])
+def account_info(message):
+    user_id = message.from_user.id
+    user_data = get_user(user_id)
+    lang = user_data['lang']
+    
+    is_active = False
+    sub_status_text = TEXTS[lang]['inactive']
+    
+    if user_data['sub_end']:
+        end_date = datetime.strptime(user_data['sub_end'], '%Y-%m-%d')
+        if datetime.now() <= end_date:
+            is_active = True
+            sub_status_text = TEXTS[lang]['active'].format(end=user_data['sub_end'])
 
-@bot.message_handler(commands=['activate'])
-def admin_activate(message):
-    if str(message.chat.id) != str(ADMIN_ID):
-        return 
-    try:
-        parts = message.text.split()
-        target_user_id = int(parts[1])
-        days = int(parts[2])
-        
-        tz = pytz.timezone('Asia/Riyadh')
-        start_date = datetime.datetime.now(tz).date()
-        end_date = start_date + datetime.timedelta(days=days)
-        
-        update_user(target_user_id, 'is_sub', 1)
-        update_user(target_user_id, 'start_date', start_date.strftime('%Y-%m-%d'))
-        update_user(target_user_id, 'end_date', end_date.strftime('%Y-%m-%d'))
-        update_user(target_user_id, 'trials', 0)
-        
-        bot.reply_to(message, f"✅ **تم التفعيل بنجاح!**\n👤 المستخدم: `{target_user_id}`\n📅 الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
-        user_msg = TEXTS['ar']['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
-        bot.send_message(target_user_id, user_msg, parse_mode='Markdown')
-    except:
-        bot.reply_to(message, f"❌ استخدم الصيغة `/activate <USER_ID> <DAYS>`")
+    msg = TEXTS[lang]['account'].format(
+        user_id=user_id,
+        trials=(3 - user_data['trials']) if not is_active else '∞',
+        sub_status=sub_status_text
+    )
+    bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
+# التعامل مع الصور المرسلة (التحليل)
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    if not GEMINI_API_KEY:
-        return
-
-    user = get_user(message.chat.id)
-    lang = user[1] if user[1] in TEXTS else 'ar'
-    trials, is_sub, end_date_str = user[2], user[3], user[5]
+    user_id = message.from_user.id
+    user_data = get_user(user_id)
+    lang = user_data['lang']
     
-    if is_sub:
-        tz = pytz.timezone('Asia/Riyadh')
-        today_date = datetime.datetime.now(tz).date()
-        try:
-            end_date = datetime.datetime.strptime(end_date_str, '%Y-%m-%d').date()
-            if today_date > end_date:
-                update_user(message.chat.id, 'is_sub', 0)
-                is_sub = 0
-        except:
-            pass
-
-    if not is_sub and trials >= 3:
-        bot.reply_to(message, TEXTS[lang]['no_trials_msg'].format(user_id=message.chat.id), parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+    # التحقق من الاشتراك والمحاولات
+    is_active = False
+    if user_data['sub_end']:
+        end_date = datetime.strptime(user_data['sub_end'], '%Y-%m-%d')
+        if datetime.now() <= end_date:
+            is_active = True
+            
+    if not is_active and user_data['trials'] <= 0:
+        bot.send_message(message.chat.id, TEXTS[lang]['no_trials_msg'].format(user_id=user_id), parse_mode='Markdown')
         return
 
-    status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
+    # إرسال رسالة الانتظار
+    wait_msg = bot.reply_to(message, TEXTS[lang]['wait'])
     
     try:
+        # تحميل الصورة
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        img = prepare_image(downloaded_file)
+        image = PIL.Image.open(io.BytesIO(downloaded_file))
         
-        analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
-        safe_send_long_text(message.chat.id, status_message_id=status_msg.message_id, full_text=analysis_result)
+        # استدعاء Gemini مع الصورة والـ Prompt الصارم
+        system_prompt = TEXTS[lang]['prompt']
+        response = model.generate_content([system_prompt, image])
         
-        if not is_sub:
-            update_user(message.chat.id, 'trials', trials + 1)
-
+        # خصم محاولة إذا لم يكن مشتركاً
+        if not is_active:
+            update_user(user_id, trials=user_data['trials'] - 1)
+            
+        # إرسال التحليل
+        bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, 
+                              text=response.text, parse_mode='Markdown')
+                              
     except Exception as e:
-        logger.error(f"Error: {traceback.format_exc()}")
-        bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text="❌ خطأ، يرجى إعادة المحاولة.")
+        bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, 
+                              text=f"❌ Error / خطأ: {str(e)}")
 
-@app.route('/', methods=['GET'])
-def home():
-    return "TradeGuard AI Active!"
+# أمر تفعيل الاشتراك (للاستخدام من قبل الإدمن أو يمكن ربطه بـ API الدفع مستقبلاً)
+@bot.message_handler(commands=['activate'])
+def admin_activate(message):
+    # يُفضل إضافة شرط للتحقق من أن المرسل هو الأدمن (عبر التأكد من user_id)
+    try:
+        args = message.text.split()
+        target_user = int(args[1])
+        days = int(args[2])
+        
+        end_date = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
+        update_user(target_user, sub_end=end_date)
+        
+        user_lang = get_user(target_user)['lang']
+        bot.send_message(target_user, TEXTS[user_lang]['activate_success_user'].format(end_date=end_date), parse_mode='Markdown')
+        bot.reply_to(message, f"✅ User {target_user} activated for {days} days.")
+    except Exception:
+        bot.reply_to(message, "⚠️ Format: /activate <user_id> <days>")
 
-@app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
-def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        try:
-            json_string = request.get_data().decode('utf-8')
-            update = telebot.types.Update.de_json(json_string)
-            threading.Thread(target=bot.process_new_updates, args=([update],)).start()
-        except Exception:
-            pass
-        return "OK", 200
-    return "Forbidden", 1024
-
+# --- بدء تشغيل البوت ---
 if __name__ == "__main__":
-    bot.remove_webhook()
-    time.sleep(1) 
-    if RENDER_URL:
-        bot.set_webhook(url=f"{RENDER_URL.rstrip('/')}/{TELEGRAM_TOKEN}")
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    print("TradeGuard AI Bot is Running...")
+    bot.infinity_polling()
