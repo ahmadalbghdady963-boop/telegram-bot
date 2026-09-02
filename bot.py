@@ -39,12 +39,12 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# ضبط دقة الذكاء الاصطناعي (منع التخمين والحلول العشوائية)
+# ضبط دقة الذكاء الاصطناعي مع رفع الحد الأقصى للنص لمنع قطع الرسالة نهائياً
 ANALYTICAL_GEN_CONFIG = GenerationConfig(
-    temperature=0.1,       # نسبة عشوائية منخفضة جداً للالتزام الصارم بالحقائق السعرية
-    top_p=0.85,
-    top_k=30,
-    max_output_tokens=2048
+    temperature=0.1,
+    top_p=0.9,
+    top_k=40,
+    max_output_tokens=4096  # رفع السعة لمنع انقطاع النص
 )
 
 # === تهيئة البوت والسيرفر ===
@@ -96,7 +96,7 @@ TEXTS = {
     'ar': {
         'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي والاحترافي لتحليل الشارتات المالية.\n\nالرجاء اختيار لغتك / Choose your language:",
         'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي صورة لشارت مالي للتحليل المؤسسي الآن.",
-        'wait': '⏳ جاري فحص هيكل السوق، المستويات، والاتجاه بدقة عالية... برجاء الانتظار.',
+        'wait': '⏳ جاري فحص هيكل السوق وتجهيز خطة التداول الشاملة... برجاء الانتظار.',
         'no_trials_msg': '⚠️ **لقد تم إنهاء محاولاتك الثلاثة المجانية.**\n\nللاستمرار في الاستفادة من تحليلات الذكاء الاصطناعي المفتوحة، رجاءً شحن حسابك عبر إرسال:\n🔹 **20 دولار** (للاشتراك لمدة 10 أيام)\n🔹 **50 دولار** (للاشتراك الشهري)\n\n📥 **عنوان الدفع (USDT - شبكة TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **طريقة التفعيل:**\nأرسل صورة إشعار التحويل ورقم الـ ID الخاص بك `{user_id}` عبر التلغرام إلى حساب الإدارة:\n@TradeGuard_Admin',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
         'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n🔹 **اشتراك شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد التحويل، أرسل صورة الإشعار والـ ID الخاص بك (`{user_id}`) للتفعيل:\n@TradeGuard_Admin',
@@ -105,42 +105,37 @@ TEXTS = {
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
         'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال الآن ولغاية تاريخ: `{end_date}`.\nيمكنك الآن إرسال الشارتات بحرية تامة. بالتوفيق! 📈',
-        'prompt': """أنت خبير التداول الفني ومحلل هيكل السوق (Institutional Price Action Expert). مهمتك فحص الشارت المرفق بمنتهى الدقة والصرامة.
+        'prompt': """أنت خبير التداول الفني ومحلل هيكل السوق (Institutional Price Action Expert). مهمتك فحص الشارت المرفق بمنتهى الدقة والصرامة وإعطاء خطة تداول متكاملة لا توجد فيها أي نواقص.
 
 إذا لم تكن الصورة لشارت تداول مالي يحتوي شموعاً يابانية ومحور أسعار، اكتب فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
 
-إذا كان الشارت صحيحاً، اتبع القواعد المؤسسية التالية بحذافيرها:
-1. قاعدة الاتجاه الصارم (Trend Rules): لا تجادل الاتجاه العام! إذا كان السعر في هبوط حاد وسلسلة من القمم والقيعان المنخفضة (Lower Lows & Lower Highs)، فلا توصي بالشراء لمجرد ظهور ارتداد تصحيحي بسيط، بل ابحث عن فرصة بيع مع الاتجاه، أو أوصِ بـ "انتظار" لحين كسر قمة رئيسية (CHoCH).
-2. اقرأ الأرقام بدقة متناهية من المحور السعري الأيمن (Right Y-Axis).
-3. اكتب الرد باللغة العربية فقط، بأسلوب مباشر، احترافي، ومطابق تماماً للهيكل التالي دون أي مقدمات أو تفكير:
+إذا كان الشارت صحيحاً، اكتب الرد باللغة العربية فقط، بأسلوب مباشر، احترافي، وملتزماً تماماً بالهيكل التالي بدقة تامة دون أي اختصار أو قطع:
 
-1. 📊 هيكل السوق والاتجاه (Market Structure & Trend):
-- الاتجاه العام: (هابط صريح / صاعد صريح / عرضي)
-- التوصيف الفني: (شرح مختصر لمكان السعر الحالي مقارنة بالقمم والقيعان الأخيرة)
+1. 📊 الاتجاه العام وهيكل السوق:
+- الاتجاه: (صاعد / هابط / عرضي)
+- الوصف: (تحليل مختصر لحركة السعر الحالية)
 
-2. 🚧 المستويات المفتاحية (Key Levels):
-- أقوى مقاومة (Resistance Zone): (حدد السعر بدقة من المحور الأيمن + السبب)
-- أقوى دعم (Support Zone): (حدد السعر بدقة من المحور الأيمن + السبب)
+2. 🚧 المستويات المفتاحية:
+- أقوى مقاومة: (السعر بدقة من المحور الأيمن + السبب)
+- أقوى دعم: (السعر بدقة من المحور الأيمن + السبب)
 
-3. 🕯️ حركة السعر والأنماط (Price Action):
-(اذكر سلوك الشموع الأخيرة، وهل الارتفاع/الهبوط الحالي مجرد تصحيح أم كسر حقيقي)
+3. 🎯 خطة التداول الاحترافية (إلزامي ملء كل الحقول بدقة):
+- القرار: (شراء / بيع / انتظار)
+- نقطة الدخول (Entry): (السعر المحدد بدقة)
+- وقف الخسارة (SL): (مستوى سعري صارم)
+- الهدف الأول (TP1): (السعر المستهدف الأول)
+- الهدف الثاني (TP2): (السعر المستهدف الثاني)
+- الهدف الثالث (TP3): (السعر المستهدف الثالث للمديات الأوسع)
 
-4. 🎯 خطة التداول الموصى بها (Trading Setup):
-- 📌 القرار: (شراء / بيع / انتظار)
-- 🟢 منطقة الدخول (Entry Zone): (سعر محدد بدقة)
-- 🔴 وقف الخسارة الصارم (SL): (مستوى سعري منطقي يحمي الصفقة)
-- 🎯 الهدف الأول (TP1): (مستوى سعري مناسب مع نسبة مخاطرة لربح لا تقل عن 1:1.5)
-- 🎯 الهدف الثاني (TP2): (مستوى سعري للمدى الأبعد)
+4. 📈 نسبة نجاح التوقع:
+- (نسبة مئوية واضحة ومدروسة تعكس قوة الفرصة الفنية)
 
-5. 📈 نسبة نجاح التوصية والواقعية:
-- (% نسبة مئوية حقيقية تعكس مدى توافق الصفقة مع الاتجاه العام)
-
-⚠️ ملاحظة إدارة المخاطر: التزم بوقف الخسارة الموضح أعلاه دائماً ولا تجازف بأكثر من 1-2% من رأس مالك."""
+⚠️ تنبيه المخاطر: التزم دائماً بوقف الخسارة."""
     },
     'en': {
         'welcome': "Welcome to TradeGuard AI 📈\nChoose your language / اختر لغتك:",
         'lang_selected': "English language selected successfully ✅\nSend any chart image now for institutional analysis.",
-        'wait': '⏳ Analyzing market structure, levels, and trend with high precision... Please wait.',
+        'wait': '⏳ Analyzing market structure and preparing complete trading setup... Please wait.',
         'no_trials_msg': '⚠️ **Your 3 free trials have expired.**\n\nTo continue using AI analysis, please top up your account by sending:\n🔹 **$20** (10-Day Subscription)\n🔹 **$50** (Monthly Subscription)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **Activation:**\nSend transfer receipt and User ID `{user_id}` via Telegram to Admin:\n@TradeGuard_Admin',
         'account': '👤 **Your Account Details**\n\n🆔 User ID: `{user_id}`\n📊 Free Trials Used: {trials}/3\n💎 Subscription: {sub_status}',
         'sub_info': '💎 **TradeGuard AI Subscriptions**\n\n🔹 **10-Day Plan:** $20 (USDT)\n🔹 **Monthly Plan (30 Days):** $50 (USDT)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt & ID (`{user_id}`) to Admin:\n@TradeGuard_Admin',
@@ -149,35 +144,30 @@ TEXTS = {
         'btn_acc': '👤 My Account',
         'btn_sub': '💎 Subscription',
         'activate_success_user': '🎉 **Subscription Activated!**\n\nActive until: `{end_date}`.\nEnjoy unlimited chart analysis! 📈',
-        'prompt': """You are an Institutional Price Action Expert. Analyze the attached trading chart with extreme rigor.
+        'prompt': """You are an Institutional Price Action Expert. Analyze the attached trading chart with extreme rigor and provide a complete trading plan without any omissions.
 
 If the image is not a candlestick chart with a price axis, reply ONLY: "⚠️ Sorry, this image is not a candlestick chart."
 
-If valid, follow these institutional trading rules strictly:
-1. Trend Rules: Do NOT trade against the main trend! If the market is in a strong downtrend (Lower Lows & Lower Highs), do NOT recommend a Buy just because of a minor bounce. Recommend a Sell alignment or "Wait".
-2. Read price values accurately from the right Y-axis.
-3. Output ONLY in English using this exact structure with zero preamble:
+If valid, output ONLY in English using this exact structure with zero preamble:
 
-1. 📊 Market Structure & Trend:
-- Main Trend: (Strong Bearish / Strong Bullish / Ranging)
-- Technical Context: (Brief explanation of price action relative to recent swings)
+1. 📊 Market Trend & Structure:
+- Trend: (Bullish / Bearish / Ranging)
+- Description: (Brief context of price action)
 
 2. 🚧 Key Levels:
-- Major Resistance Zone: (Price level + Reason)
-- Major Support Zone: (Price level + Reason)
+- Major Resistance: (Exact price + Reason)
+- Major Support: (Exact price + Reason)
 
-3. 🕯️ Price Action & Patterns:
-(Describe current candle behavior and whether movement is a retracement or breakout)
+3. 🎯 Professional Trading Setup (Mandatory to fill all fields):
+- Decision: (Buy / Sell / Wait)
+- Entry Price: (Exact entry level)
+- Stop Loss (SL): (Strict protective level)
+- Take Profit 1 (TP1): (First target)
+- Take Profit 2 (TP2): (Second target)
+- Take Profit 3 (TP3): (Extended target)
 
-4. 🎯 Recommended Trading Setup:
-- 📌 Decision: (Buy / Sell / Wait)
-- 🟢 Entry Zone: (Exact price level)
-- 🔴 Stop Loss (SL): (Strict protective price level)
-- 🎯 Take Profit 1 (TP1): (First target with min 1:1.5 RR ratio)
-- 🎯 Take Profit 2 (TP2): (Second target)
-
-5. 📈 Setup Probability:
-- (% percentage reflecting trend alignment)
+4. 📈 Probability of Success:
+- (Percentage based on technical strength)
 
 ⚠️ Risk Warning: Always strictly enforce Stop Loss."""
     }
@@ -190,14 +180,7 @@ def get_main_keyboard(lang):
 
 def clean_analysis_output(text, target_lang):
     if not text: return text
-    if target_lang == 'ar' and "1. 📊 هيكل السوق" in text:
-        text = "1. 📊 هيكل السوق" + text.split("1. 📊 هيكل السوق")[-1]
-    
-    patterns = [r'\(Self-Correction.*?\)', r'Strict and professional\?.*?\n', r'Wait, looking closer.*?\n']
-    cleaned = text
-    for p in patterns:
-        cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
-    return cleaned.strip()
+    return text.strip()
 
 def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar'):
     full_text = clean_analysis_output(full_text, target_lang)
@@ -224,7 +207,6 @@ def generate_chart_analysis(prompt, img):
     for model_name in available_models:
         try:
             model = genai.GenerativeModel(model_name)
-            # تمرير إعدادات التوليد ANALYTICAL_GEN_CONFIG للحد من أي تخمين عشوائي
             response = model.generate_content(
                 [prompt, img], 
                 generation_config=ANALYTICAL_GEN_CONFIG,
@@ -356,7 +338,7 @@ def handle_photo(message):
 # === تشغيل السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V12.0 Institutional Precision Active!"
+    return "TradeGuard AI V13.0 Full Analytical Setup Active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
