@@ -205,7 +205,7 @@ def generate_chart_analysis(prompt, img):
     # ترتيب الأولويات للنماذج المعتمدة (الحديثة أولاً ثم الروابط العامة)
     priority_candidates = [
         'gemini-3.1-flash',
-        'gemini-3.5-flash',
+        'gemini-3.7-flash',
         'gemini-1.5-flash',
         'gemini-2.5-pro',
         'gemini-1.5-pro',
