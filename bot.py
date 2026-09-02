@@ -5,7 +5,6 @@ import datetime
 import pytz
 import logging
 import traceback
-import re
 import threading
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
@@ -97,79 +96,77 @@ TEXTS = {
         'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي والاحترافي لتحليل الشارتات المالية.\n\nالرجاء اختيار لغتك / Choose your language:",
         'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي صورة لشارت مالي للتحليل المؤسسي الآن.",
         'wait': '⏳ جاري فحص هيكل السوق وتجهيز خطة التداول الشاملة... برجاء الانتظار.',
-        'no_trials_msg': '⚠️ **لقد تم إنهاء محاولاتك الثلاثة المجانية.**\n\nللاستمرار في الاستفادة من تحليلات الذكاء الاصطناعي المفتوحة، رجاءً شحن حسابك عبر إرسال:\n🔹 **20 دولار** (للاشتراك لمدة 10 أيام)\n🔹 **50 دولار** (للاشتراك الشهري)\n\n📥 **عنوان الدفع (USDT - شبكة TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **طريقة التفعيل:**\nأرسل صورة إشعار التحويل ورقم الـ ID الخاص بك `{user_id}` عبر التلغرام إلى حساب الإدارة:\n@TradeGuard_Admin',
+        'no_trials_msg': '⚠️ **لقد تم إنهاء محاولاتك المجانية.**\n\nللاستمرار في الاستفادة من تحليلات الذكاء الاصطناعي، رجاءً شحن حسابك:\n🔹 **20 دولار** (10 أيام)\n🔹 **50 دولار** (شهري)\n\n📥 **عنوان الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل أرسل صورة التحويل والـ ID `{user_id}` إلى:\n@TradeGuard_Admin',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
-        'sub_info': '💎 **باقات الاشتراك في TradeGuard AI**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n🔹 **اشتراك شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد التحويل، أرسل صورة الإشعار والـ ID الخاص بك (`{user_id}`) للتفعيل:\n@TradeGuard_Admin',
-        'active': 'فعال ✅ (ينتهي في: {end})',
+        'sub_info': '💎 **باقات الاشتراك**\n\n🔹 **10 أيام:** 20 دولار (USDT)\n🔹 **شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان الدفع (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 للتفعيل راسل:\n@TradeGuard_Admin',
+        'active': 'فعال ✅ (ينتهي: {end})',
         'inactive': 'غير فعال ❌',
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
-        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال الآن ولغاية تاريخ: `{end_date}`.\nيمكنك الآن إرسال الشارتات بحرية تامة. بالتوفيق! 📈',
-        'prompt': """أنت خبير التداول الفني ومحلل هيكل السوق (Institutional Price Action Expert). مهمتك فحص الشارت المرفق بمنتهى الدقة والصرامة وإعطاء خطة تداول متكاملة.
+        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nصالح لغاية: `{end_date}`.\nيمكنك الآن إرسال الشارتات بحرية. بالتوفيق! 📈',
+        'prompt': """أنت خبير تداول مؤسسي (Smart Money & Price Action). افحص الشارت بدقة. 
+إذا لم تكن الصورة لشارت تداول، اكتب فقط: "⚠️ الصورة لا تطابق شارت تداول."
 
-إذا لم تكن الصورة لشارت تداول مالي يحتوي شموعاً يابانية ومحور أسعار، اكتب فقط: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية."
+إذا كان شارتاً، اكتب تحليلاً باللغة العربية حصراً، بأسلوب مباشر دون مقدمات، ويجب أن يملأ كل النقاط التالية بدقة:
 
-إذا كان الشارت صحيحاً، اكتب الرد باللغة العربية فقط، بأسلوب مباشر واحترافي بالهيكل التالي:
-
-1. 📊 الاتجاه العام وهيكل السوق:
-- الاتجاه: (صاعد / هابط / عرضي)
-- الوصف: (تحليل مختصر لحركة السعر الحالية)
+1. 📊 الاتجاه وهيكل السوق:
+- الاتجاه العام: (صاعد/هابط/عرضي)
+- التوصيف: (شرح مختصر لحركة السعر)
 
 2. 🚧 المستويات المفتاحية:
-- أقوى مقاومة: (السعر بدقة من المحور الأيمن + السبب)
-- أقوى دعم: (السعر بدقة من المحور الأيمن + السبب)
+- مقاومة رئيسية: (السعر بدقة + السبب)
+- دعم رئيسي: (السعر بدقة + السبب)
 
-3. 🎯 خطة التداول الاحترافية:
+3. 🎯 خطة التداول الشاملة:
 - القرار: (شراء / بيع / انتظار)
-- نقطة الدخول (Entry): (السعر المحدد بدقة)
-- وقف الخسارة (SL): (مستوى سعري صارم)
-- الهدف الأول (TP1): (السعر المستهدف الأول)
-- الهدف الثاني (TP2): (السعر المستهدف الثاني)
-- الهدف الثالث (TP3): (السعر المستهدف الثالث)
+- نقطة الدخول (Entry): (مستوى سعري محدد)
+- وقف الخسارة (SL): (مستوى حماية صارم)
+- الهدف الأول (TP1): (السعر)
+- الهدف الثاني (TP2): (السعر)
+- الهدف الثالث (TP3): (السعر الأبعد)
 
-4. 📈 نسبة نجاح التوقع:
-- (نسبة مئوية واضحة ومدروسة)
+4. 📈 نسبة نجاح الفرصة:
+- (النسبة المئوية %)
 
-⚠️ تنبيه المخاطر: التزم دائماً بوقف الخسارة."""
+⚠️ تذكير: التزم دائماً بوقف الخسارة."""
     },
     'en': {
         'welcome': "Welcome to TradeGuard AI 📈\nChoose your language / اختر لغتك:",
-        'lang_selected': "English language selected successfully ✅\nSend any chart image now for institutional analysis.",
-        'wait': '⏳ Analyzing market structure and preparing complete trading setup... Please wait.',
-        'no_trials_msg': '⚠️ **Your 3 free trials have expired.**\n\nTo continue using AI analysis, please top up your account by sending:\n🔹 **$20** (10-Day Subscription)\n🔹 **$50** (Monthly Subscription)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 **Activation:**\nSend transfer receipt and User ID `{user_id}` via Telegram to Admin:\n@TradeGuard_Admin',
-        'account': '👤 **Your Account Details**\n\n🆔 User ID: `{user_id}`\n📊 Free Trials Used: {trials}/3\n💎 Subscription: {sub_status}',
-        'sub_info': '💎 **TradeGuard AI Subscriptions**\n\n🔹 **10-Day Plan:** $20 (USDT)\n🔹 **Monthly Plan (30 Days):** $50 (USDT)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt & ID (`{user_id}`) to Admin:\n@TradeGuard_Admin',
-        'active': 'Active ✅ (Expires: {end})',
+        'lang_selected': "English selected successfully ✅\nSend any chart image now.",
+        'wait': '⏳ Analyzing market structure and preparing trading setup... Please wait.',
+        'no_trials_msg': '⚠️ **Trials Expired.**\n\nTop up your account to continue:\n🔹 **$20** (10 Days)\n🔹 **$50** (Monthly)\n\n📥 **USDT - TON Network:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt & ID `{user_id}` to:\n@TradeGuard_Admin',
+        'account': '👤 **Account Details**\n\n🆔 ID: `{user_id}`\n📊 Trials: {trials}/3\n💎 Subscription: {sub_status}',
+        'sub_info': '💎 **Subscriptions**\n\n🔹 **10-Day:** $20 (USDT)\n🔹 **Monthly:** $50 (USDT)\n\n📥 **USDT - TON Network:**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Contact Admin:\n@TradeGuard_Admin',
+        'active': 'Active ✅ (Ends: {end})',
         'inactive': 'Inactive ❌',
-        'btn_acc': '👤 My Account',
+        'btn_acc': '👤 Account',
         'btn_sub': '💎 Subscription',
-        'activate_success_user': '🎉 **Subscription Activated!**\n\nActive until: `{end_date}`.\nEnjoy unlimited chart analysis! 📈',
-        'prompt': """You are an Institutional Price Action Expert. Analyze the attached trading chart with extreme rigor.
-
-If the image is not a candlestick chart with a price axis, reply ONLY: "⚠️ Sorry, this image is not a candlestick chart."
+        'activate_success_user': '🎉 **Subscription Activated!**\n\nValid until: `{end_date}`. Enjoy! 📈',
+        'prompt': """You are an Institutional Trading Expert. Analyze the chart.
+If not a chart, reply ONLY: "⚠️ Not a valid trading chart."
 
 If valid, output ONLY in English using this exact structure:
 
-1. 📊 Market Trend & Structure:
-- Trend: (Bullish / Bearish / Ranging)
-- Description: (Brief context)
+1. 📊 Trend & Structure:
+- Main Trend: (Bullish/Bearish/Ranging)
+- Context: (Brief explanation)
 
 2. 🚧 Key Levels:
-- Major Resistance: (Exact price + Reason)
-- Major Support: (Exact price + Reason)
+- Major Resistance: (Price + Reason)
+- Major Support: (Price + Reason)
 
-3. 🎯 Professional Trading Setup:
-- Decision: (Buy / Sell / Wait)
-- Entry Price: (Exact entry level)
-- Stop Loss (SL): (Strict protective level)
-- Take Profit 1 (TP1): (First target)
-- Take Profit 2 (TP2): (Second target)
-- Take Profit 3 (TP3): (Extended target)
+3. 🎯 Comprehensive Trading Setup:
+- Decision: (Buy/Sell/Wait)
+- Entry Price: (Exact level)
+- Stop Loss (SL): (Strict level)
+- Take Profit 1 (TP1): (Price)
+- Take Profit 2 (TP2): (Price)
+- Take Profit 3 (TP3): (Extended Price)
 
-4. 📈 Probability of Success:
-- (Percentage value)
+4. 📈 Setup Probability:
+- (Percentage %)
 
-⚠️ Risk Warning: Always strictly enforce Stop Loss."""
+⚠️ Risk Warning: Always enforce SL."""
     }
 }
 
@@ -178,7 +175,7 @@ def get_main_keyboard(lang):
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
 
-def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar'):
+def safe_send_long_text(chat_id, status_message_id, full_text):
     try:
         bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=full_text.strip(), parse_mode='Markdown')
     except Exception:
@@ -187,7 +184,6 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
         except Exception:
             pass
 
-# دالة تجهيز وضغط الصورة لتقليل استهلاك الكوتا
 def prepare_image(img_bytes):
     img = Image.open(BytesIO(img_bytes))
     if img.mode != 'RGB':
@@ -198,12 +194,44 @@ def prepare_image(img_bytes):
     return img
 
 def generate_chart_analysis(prompt, img):
-    # استخدام نماذج Flash المباشرة للحد من تجاوز الكوتا
-    candidate_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'gemini-1.5-flash']
+    # الفحص التلقائي المستند إلى النماذج المتاحة حقيقةً في مكتبة جوني آي (بدون أسماء وهمية)
+    try:
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        logger.info(f"Available models found: {available_models}")
+    except Exception as e:
+        logger.warning(f"Could not list models dynamically: {e}")
+        available_models = []
+
+    # ترتيب الأولويات للنماذج المعتمدة (الحديثة أولاً ثم الروابط العامة)
+    priority_candidates = [
+        'gemini-2.5-flash',
+        'gemini-3.5-flash',
+        'gemini-1.5-flash',
+        'gemini-2.5-pro',
+        'gemini-1.5-pro',
+        'gemini-flash-latest',
+        'gemini-pro-latest'
+    ]
     
+    # دمج النماذج المتاحة فعلياً من الحساب مع القائمة المفضلة
+    candidate_models = []
+    for m in priority_candidates:
+        if any(m in am for am in available_models):
+            candidate_models.append(m)
+            
+    # إضافة أي نموذج آخر متاح يدعم المحتوى كاحتياطي نهائي
+    for am in available_models:
+        if am not in candidate_models and ('flash' in am or 'pro' in am):
+            candidate_models.append(am)
+
+    # إذا لم تنجح الجدولة التلقائية، نضع الأسماء الأكثر ضماناً كملجأ أخير
+    if not candidate_models:
+        candidate_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-pro-latest']
+
     last_error = None
     for model_name in candidate_models:
         try:
+            logger.info(f"Trying model: {model_name}")
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(
                 [prompt, img], 
@@ -213,18 +241,19 @@ def generate_chart_analysis(prompt, img):
             if response and response.text:
                 return response.text
         except Exception as e:
+            err_str = str(e).lower()
             logger.warning(f"Model {model_name} failed: {e}")
             last_error = e
-            if "429" in str(e) or "quota" in str(e).lower():
+            if "429" in err_str or "quota" in err_str:
                 time.sleep(2)
             continue
             
     if last_error and ("429" in str(last_error) or "quota" in str(last_error).lower()):
         raise Exception("QUOTA_EXCEEDED")
-    raise Exception("تعذر تحليل الصورة حالياً، يرجى إعادة المحاولة.")
+        
+    raise Exception(f"API Error. Please try again.")
 
 # === الأوامر والمعالجات ===
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     get_user(message.chat.id)
@@ -254,7 +283,7 @@ def account_info(message):
             if today_date > end_date:
                 is_sub = 0
                 update_user(message.chat.id, 'is_sub', 0)
-        except Exception:
+        except:
             pass
 
     sub_status = TEXTS[lang]['active'].format(end=end_date_str) if is_sub else TEXTS[lang]['inactive']
@@ -288,17 +317,16 @@ def admin_activate(message):
         update_user(target_user_id, 'end_date', end_date.strftime('%Y-%m-%d'))
         update_user(target_user_id, 'trials', 0)
         
-        bot.reply_to(message, f"✅ **تم التفعيل بنجاح!**\n👤 المستخدم: `{target_user_id}`\n📅 الفترة: {days} يوم\n📅 الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
-        
+        bot.reply_to(message, f"✅ **تم التفعيل بنجاح!**\n👤 المستخدم: `{target_user_id}`\n📅 الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
         user_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
         bot.send_message(target_user_id, user_msg, parse_mode='Markdown', reply_markup=get_main_keyboard(target_lang))
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطأ: استخدم الصيغة `/activate <USER_ID> <DAYS>`")
+    except:
+        bot.reply_to(message, f"❌ استخدم الصيغة `/activate <USER_ID> <DAYS>`")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ مفتاح الذكاء الاصطناعي غير مضاف في السيرفر.")
+        bot.reply_to(message, "❌ مفتاح الـ API غير مضاف.")
         return
 
     user = get_user(message.chat.id)
@@ -317,8 +345,7 @@ def handle_photo(message):
             pass
 
     if not is_sub and trials >= 3:
-        msg = TEXTS[lang]['no_trials_msg'].format(user_id=message.chat.id)
-        bot.reply_to(message, msg, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        bot.reply_to(message, TEXTS[lang]['no_trials_msg'].format(user_id=message.chat.id), parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
         return
 
     status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
@@ -326,28 +353,26 @@ def handle_photo(message):
     try:
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        
-        # ضغط الصورة لتوفير الكوتا والتوكينات
         img = prepare_image(downloaded_file)
         
         analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
-        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
+        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result)
         
         if not is_sub:
             update_user(message.chat.id, 'trials', trials + 1)
 
     except Exception as e:
-        logger.error(f"Error: {traceback.format_exc()}")
+        logger.error(f"Error during analysis: {traceback.format_exc()}")
         if "QUOTA_EXCEEDED" in str(e):
-            err_text = "⚠️ وصل الحساب المجاني للحد الأقصى من الطلبات المسموح بها في الدقيقة. يرجى الانتظار 30 ثانية وإعادة إرسال الصورة."
+            err_text = "⚠️ وصلت لـ الحد الأقصى المجاني من جوجل في الدقيقة. يرجى الانتظار دقيقة وإعادة إرسال الصورة."
         else:
-            err_text = "❌ تعذر استكمال التحليل بسبب ضغط الشبكة، يرجى إعادة المحاولة."
+            err_text = "❌ حدث خطأ في الاتصال بالذكاء الاصطناعي، يرجى إعادة المحاولة."
         bot.edit_message_text(chat_id=message.chat.id, message_id=status_msg.message_id, text=err_text)
 
 # === تشغيل السيرفر ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI V14.0 Quota-Optimized Active!"
+    return "TradeGuard AI V16.0 - Fully Validated Active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -363,6 +388,7 @@ def webhook():
 
 if __name__ == "__main__":
     bot.remove_webhook()
+    time.sleep1 = 1
     time.sleep(1) 
     if RENDER_URL:
         bot.set_webhook(url=f"{RENDER_URL.rstrip('/')}/{TELEGRAM_TOKEN}")
