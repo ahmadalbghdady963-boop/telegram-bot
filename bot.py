@@ -132,7 +132,7 @@ TEXTS = {
 - أهداف جني الأرباح (Take Profit Targets):
   • الهدف الأول (TP1):
   • الهدف الثاني (TP2):
-  • Target 3 (TP3):
+  • الهدف الثالث (TP3):
 - نسبة المخاطرة إلى العائد (Risk-to-Reward Ratio): (مثال 1:2.5)
 - توجيه إدارة المخاطر: (إرشادات حازمة لحجم العقود وتجنب الانزلاق السعري)"""
     },
@@ -248,67 +248,38 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === محرك اختيار النماذج المتطور (يدعم 2.5 و 2.0 و 3.x والديناميكي) ===
+# === محرك التحليل الآمن والسريع (بدون تجريب النماذج الفردية أو استنزاف الحصة) ===
+STABLE_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+
 def generate_chart_analysis(prompt, img):
     if not API_KEYS:
         raise Exception("لم يتم العثور على مفاتيح صالحة.")
 
     last_error = None
 
-    # ترتيب النماذج بدءاً من الإصدارات الحديثة والمدعومة بمفاتيح AQ
-    default_candidates = [
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-2.0-flash-exp',
-        'gemini-1.5-flash-8b',
-        'gemini-1.5-flash',
-        'gemini-1.5-pro'
-    ]
-
-    for key_idx, key in enumerate(API_KEYS):
-        try:
-            genai.configure(api_key=key)
-            
-            # جلب النماذج المتاحة من جوجل لهذا المفتاح تحديداً
-            key_models = []
+    # الدوران على النماذج الرسمية المستقرة فقط، وتمرير المفاتيح عليها دون حرق الحصة
+    for model_name in STABLE_MODELS:
+        for key_idx, key in enumerate(API_KEYS):
             try:
-                for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods:
-                        clean_m = m.name.replace('models/', '')
-                        if 'text-embedding' not in clean_m and 'imagen' not in clean_m:
-                            key_models.append(clean_m)
-            except Exception as list_err:
-                logger.warning(f"تعذر استعلام النماذج للمفتاح #{key_idx + 1}: {list_err}")
+                genai.configure(api_key=key)
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content([prompt, img], safety_settings=safety_settings)
+                
+                if response and response.text:
+                    logger.info(f"✅ تم التحليل بنجاح عبر النموذج [{model_name}] بالمفتاح #{key_idx + 1}")
+                    return response.text
+            except Exception as err:
+                err_str = str(err)
+                logger.warning(f"تجاوز النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_str}")
+                last_error = err
+                
+                # إذا كان الخطأ 404 (النموذج غير مدعوم على هذه البيئة)، ننتقل للنموذج التالي فوراً
+                if "404" in err_str:
+                    break
+                # إذا كان 429 (تجاوز معدل الطلبات للرمز الحالي)، ينتقل للمفتاح التالي فوراً
+                continue
 
-            # دمج قائمة المفتاح مع القائمة الافتراضية
-            models_to_try = []
-            for m in key_models + default_candidates:
-                if m not in models_to_try:
-                    models_to_try.append(m)
-
-            for model_name in models_to_try:
-                try:
-                    time.sleep(1) # فاصل زمني لتجنب الضغط
-                    model = genai.GenerativeModel(model_name)
-                    response = model.generate_content([prompt, img], safety_settings=safety_settings)
-                    
-                    if response and response.text:
-                        logger.info(f"✅ تم التحليل بنجاح عبر النموذج [{model_name}] بالمفتاح #{key_idx + 1}")
-                        return response.text
-                        
-                except Exception as mod_err:
-                    err_text = str(mod_err)
-                    logger.warning(f"تجاوز النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_text}")
-                    last_error = mod_err
-                    # الانتقال التلقائي للنموذج التالي عند حدوث 404 أو 429
-                    continue
-
-        except Exception as key_err:
-            logger.error(f"خطأ في المفتاح #{key_idx + 1}: {key_err}")
-            last_error = key_err
-            continue
-
-    raise Exception(f"تعذر معالجة الطلب عبر جميع المفاتيح. آخر خطأ: {last_error}")
+    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح. آخر خطأ: {last_error}")
 
 # === المعالجات والأوامر ===
 @bot.message_handler(commands=['start'])
