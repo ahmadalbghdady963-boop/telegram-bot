@@ -24,7 +24,7 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRA
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
-# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح يبدأ بـ AIza/aiza
+# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح يبدأ بـ AIza/aiza واعتماد مفاتيح AQ
 raw_keys = os.environ.get('GEMINI_API_KEYS') or os.environ.get('GEMINI_API_KEY') or ''
 API_KEYS = [
     k.strip() for k in raw_keys.split(',') 
@@ -34,7 +34,7 @@ API_KEYS = [
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات Render.")
 
-# إعدادات الأمان المطلقة لضمان معالجة الشارتات والبيانات المالية بدون حجب
+# إعدادات الأمان المطلقة
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -80,7 +80,7 @@ def update_user(user_id, field, value):
     conn.commit()
     conn.close()
 
-# === القوالب والبرومبت المؤسسي المطور ===
+# === القوالب والبرومبت ===
 TEXTS = {
     'ar': {
         'welcome': "مرحباً بك في TradeGuard AI Pro 📈\nالمحرك الذكي المتقدم لتحليل الشارتات المالية بدقة مؤسسية فائقة.\n\nالرجاء اختيار لغتك / Choose your language:",
@@ -197,7 +197,6 @@ def get_main_keyboard(lang):
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
 
-# === تنظيف مخرجات الذكاء الاصطناعي ===
 def clean_analysis_output(text, target_lang):
     if not text:
         return text
@@ -225,10 +224,8 @@ def clean_analysis_output(text, target_lang):
     cleaned = text
     for p in patterns:
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
-    
     return cleaned.strip()
 
-# === معالج إرسال الرسائل الطويلة ===
 def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar'):
     full_text = clean_analysis_output(full_text, target_lang)
     chunk_size = 3800
@@ -251,40 +248,36 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === محرك التحليل الديناميكي مع المداورة واستبعاد مفاتيح AIza ===
+# === المحرك الجديد الحصري والمستقر (لا مزيد من الأخطاء العشوائية) ===
 def generate_chart_analysis(prompt, img):
     if not API_KEYS:
-        raise Exception("لم يتم العثور على مفاتيح صالحة. (تم حظر واستبعاد أي مفاتيح تبدأ بـ AIza).")
+        raise Exception("لم يتم العثور على مفاتيح صالحة. (تأكد من إدخال المفاتيح بشكل صحيح في بيئة ريندر).")
 
     last_error = None
+    
+    # [الحل الجذري]: بدلاً من جلب النماذج العشوائية التي تسبب أخطاء 404 و 429، 
+    # قمنا بتثبيت النماذج الرسمية المستقرة الخاصة بتحليل الصور.
+    stable_models = ['gemini-1.5-flash', 'gemini-1.5-pro']
 
-    # التنقل عبر قائمة المفاتيح النظيفة المعتمدة
     for key_idx, key in enumerate(API_KEYS):
         try:
             genai.configure(api_key=key)
             
-            # جلب النماذج المتاحة ديناميكياً بحسب البوت السابق
-            available_models = []
-            try:
-                for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods:
-                        available_models.append(m.name)
-            except Exception as list_err:
-                logger.warning(f"تعذر استعلام قائمة النماذج للمفتاح #{key_idx + 1}: {list_err}")
-
-            # القائمة الاحتياطية الرسمية المعتمدة
-            if not available_models:
-                available_models = ['models/gemini-2.5-flash', 'models/gemini-2.0-flash', 'models/gemini-1.5-flash']
-
-            for model_name in available_models:
+            for model_name in stable_models:
                 try:
+                    time.sleep(1.5) # فاصل زمني بسيط لمنع حظر الطلبات المتكررة
                     model = genai.GenerativeModel(model_name)
                     response = model.generate_content([prompt, img], safety_settings=safety_settings)
+                    
                     if response and response.text:
                         logger.info(f"✅ تم التحليل بنجاح عبر النموذج [{model_name}] بالمفتاح #{key_idx + 1}")
                         return response.text
+                        
                 except Exception as mod_err:
-                    logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {mod_err}")
+                    error_str = str(mod_err)
+                    logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {error_str}")
+                    last_error = mod_err
+                    # في حال واجه خطأ ضغط شبكة ينتقل للنموذج التالي بسلاسة
                     continue
 
         except Exception as key_err:
@@ -292,10 +285,9 @@ def generate_chart_analysis(prompt, img):
             last_error = key_err
             continue
 
-    raise Exception(f"تعذر معالجة الصورة عبر كافة المفاتيح والنماذج المتاحة. آخر خطأ: {last_error}")
+    raise Exception(f"جميع المفاتيح المتاحة ({len(API_KEYS)}) مستهلكة حالياً. آخر خطأ تم تسجيله: {last_error}")
 
 # === المعالجات والأوامر ===
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     get_user(message.chat.id)
@@ -360,7 +352,6 @@ def admin_activate(message):
     except Exception as e:
         bot.reply_to(message, f"❌ خطأ: {e}")
 
-# معالج الصور والتحليل الفني
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     user = get_user(message.chat.id)
