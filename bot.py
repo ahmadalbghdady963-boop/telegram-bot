@@ -6,7 +6,7 @@ import pytz
 import logging
 import traceback
 import re
-import threading  # تم إضافتها لمعالجة الطلبات في الخلفية ومشاركتها مع Flask
+import threading
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask, request
@@ -19,17 +19,17 @@ from PIL import Image
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# === إعدادات النظام ===
+# === إعدادات النظام والمفاتيح Multi-API Keys ===
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRAM_TOKEN') or os.environ.get('BOT_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
+# قراءة مفاتيح API المتعددة المفصولة بفاصلة
+raw_keys = os.environ.get('GEMINI_API_KEYS') or os.environ.get('GEMINI_API_KEY') or ''
+API_KEYS = [k.strip() for k in raw_keys.split(',') if k.strip()]
+
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات Render.")
-
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 # إعدادات الأمان
 safety_settings = {
@@ -77,7 +77,7 @@ def update_user(user_id, field, value):
     conn.commit()
     conn.close()
 
-# === نصوص وقوالب اللغات والتحليل الفني (دون تعديل) ===
+# === نصوص وقوالب اللغات والتحليل الفني (مع تحسين البرومبت) ===
 TEXTS = {
     'ar': {
         'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي لتحليل الأسواق المالية والفوركس بأعلى دقة مؤسسية.\n\nالرجاء اختيار لغتك / Choose your language:",
@@ -97,10 +97,11 @@ TEXTS = {
 قواعد صارمة جداً:
 1. إذا لم تكن الصورة لشارت تداول مالي أو شموع يابانية واضحة، اكتب حرفياً وبدون إضافات: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية أو سوق مالي."
 2. اعتمد على الأسعار والقمم والقعور المرئية بدقة بالغة من على المحاور الظاهرة بالشارت.
-3. قدم تحليلاً مؤسسياً احترافياً متكاملأً باللغة العربية حصراً وبدون أي مقدمات أو تكرار أو مسودات تفكير، مستخدماً القالب التالي تماماً:
+3. تنبيه حاسم لسرقة السيولة (Liquidity Sweep): إذا لاحظت وجود ذيول شموع طويلة جداً (Spikes/Wicks) تم رفضها بقوة من القمم أو القيعان، قم بتقييمها كإشارات صيد سيولة وانعكاس محتمل وليست مجرد استمرار للاتجاه.
+4. قدم تحليلاً مؤسسياً احترافياً متكاملأً باللغة العربية حصراً وبدون أي مقدمات أو تكرار أو مسودات تفكير، مستخدماً القالب التالي تماماً:
 
 1. هيكل السوق والاتجاه المسيطر:
-- الإطار الزمني المقدر ونوع الاتجاه (صاعد/هابط/عرضي مع ذكر السبب البنيوي للشموع).
+- الإطار الزمني المقدر ونوع الاتجاه (صاعد/هابط/عرضي مع ذكر السبب البنيوي للشموع والسيولة).
 
 2. مناطق السيولة ومستويات العرض والطلب:
 - مناطق العرض الرئيسية: (الأسعار والأسباب الفنية بدقة)
@@ -138,7 +139,8 @@ Your mission is to analyze the attached chart with absolute precision, extractin
 Strict Rules:
 1. If the image is not a valid candlestick chart or financial graph, reply ONLY: "⚠️ Sorry, this image is not a candlestick chart or financial market graph."
 2. Base all price levels, swing highs, and swing lows strictly on the visible axis numbers.
-3. Output ONLY in English using this exact template with NO preambles, chain-of-thought, or markdown meta-text:
+3. Liquidity Sweep Warning: If long wicks or spikes show sharp price rejection, treat them as liquidity sweeps and potential reversals, not trend continuations.
+4. Output ONLY in English using this exact template with NO preambles, chain-of-thought, or markdown meta-text:
 
 1. Market Structure & Dominant Trend:
 - Estimated timeframe and trend direction (Bullish/Bearish/Consolidation with structural reasoning).
@@ -168,7 +170,7 @@ def get_main_keyboard(lang):
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
     return markup
 
-# === تنظيف وتقليم مخرجات الذكاء الاصطناعي ===
+# === تنظيف مخرجات الذكاء الاصطناعي ===
 def clean_analysis_output(text, target_lang):
     if not text:
         return text
@@ -221,31 +223,36 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === توليد التحليل الفني ===
+# === توليد التحليل الفني مع المداورة التلقائية للمفاتيح (API Key Rotation) ===
 def generate_chart_analysis(prompt, img):
-    available_models = []
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-    except Exception as e:
-        logger.error(f"Error listing models: {e}")
-        available_models = ['models/gemini-2.5-flash', 'models/gemini-2.0-flash', 'models/gemini-1.5-flash']
+    if not API_KEYS:
+        raise Exception("لم يتم إعداد مفاتيح GEMINI_API_KEYS في إعدادات البيئة.")
 
-    if not available_models:
-        raise Exception("لا يوجد نموذج ذكاء اصطناعي متاح حالياً.")
+    last_error = None
 
-    for model_name in available_models:
+    # التكرار على جميع المفاتيح لتجاوز أي مفتاح ينتهي حده
+    for idx, key in enumerate(API_KEYS):
         try:
-            model = genai.GenerativeModel(model_name)
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content([prompt, img], safety_settings=safety_settings)
+            
             if response and response.text:
+                logger.info(f"✅ تم التحليل بنجاح باستخدام المفتاح رقم ({idx + 1})")
                 return response.text
-        except Exception as e:
-            logger.warning(f"Model {model_name} failed: {e}")
-            continue
 
-    raise Exception("تعذر تحليل الصورة، يرجى التأكد من وضوح الشارت والمحاولة لاحقاً.")
+        except Exception as e:
+            err_msg = str(e).lower()
+            if '429' in err_msg or 'quota' in err_str or 'resourceexceeded' in err_msg:
+                logger.warning(f"⚠️ المفتاح رقم ({idx + 1}) تجاوز الحد المسموح (429). جاري الانتقال للمفتاح التالي...")
+                last_error = e
+                continue
+            else:
+                logger.error(f"❌ خطأ في المفتاح رقم ({idx + 1}): {e}")
+                last_error = e
+                continue
+
+    raise Exception(f"جميع مفاتيح API المتاحة ({len(API_KEYS)}) مشغولة حالياً أو تجاوزت الحد. التفاصيل: {last_error}")
 
 # === الأوامر والمعالجات ===
 
@@ -288,6 +295,10 @@ def admin_activate(message):
         return 
     try:
         parts = message.text.split()
+        if len(parts) < 3:
+            bot.reply_to(message, "❌ خطأ: استخدم الصيغة الصحيحة تماماً:\n`/activate <USER_ID> <DAYS>`", parse_mode='Markdown')
+            return
+
         target_user_id = int(parts[1])
         days = int(parts[2])
         
@@ -307,13 +318,13 @@ def admin_activate(message):
         user_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
         bot.send_message(target_user_id, user_msg, parse_mode='Markdown')
     except Exception as e:
-        bot.reply_to(message, f"❌ خطأ: استخدم الصيغة الصحيحة تماماً:\n`/activate <USER_ID> <DAYS>`")
+        bot.reply_to(message, f"❌ خطأ في معالجة الأمر: {e}")
 
 # معالج الصور والتحليل الفني
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ مفتاح GEMINI_API_KEY غير مضاف في إعدادات السيرفر.")
+    if not API_KEYS:
+        bot.reply_to(message, "❌ لم يتم ضبط مفاتيح الذكاء الاصطناعي (GEMINI_API_KEYS) في السيرفر.")
         return
 
     user = get_user(message.chat.id)
@@ -350,10 +361,10 @@ def handle_photo(message):
         logger.error(f"Error: {traceback.format_exc()}")
         safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
 
-# === تشغيل السيرفر والـ Webhook (تم التعديل هنا فقط لحل مشكلة التكرار والـ Timeout) ===
+# === تشغيل السيرفر والـ Webhook ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI Pro V11.0 Active & Operational!"
+    return "TradeGuard AI Pro Active & Operational!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -361,7 +372,6 @@ def webhook():
         try:
             json_string = request.get_data().decode('utf-8')
             update = telebot.types.Update.de_json(json_string)
-            # تشغيل معالجة التحديث في خيط خلفي منعاً لطلب إعادة الإرسال من تليجرام
             threading.Thread(target=bot.process_new_updates, args=([update],)).start()
         except Exception as e:
             logger.error(f"Webhook Error: {e}")
