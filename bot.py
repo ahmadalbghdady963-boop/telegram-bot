@@ -24,7 +24,7 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRA
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
-# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح غير صالح
+# قراءة مفاتيح API وتطبيق الفلتر لاستبعاد المفاتيح التالفة
 raw_keys = os.environ.get('GEMINI_API_KEYS') or os.environ.get('GEMINI_API_KEY') or ''
 API_KEYS = [
     k.strip() for k in raw_keys.split(',') 
@@ -248,8 +248,8 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === محرك التحليل المحسن (تحديث النماذج والتنقل الذكي بين المفاتيح) ===
-STABLE_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+# === تحديث النموذج إلى الإصدار المعين في API الحديثة ===
+STABLE_MODELS = ['gemini-3.6-flash']
 
 def generate_chart_analysis(prompt, img):
     if not API_KEYS:
@@ -257,14 +257,13 @@ def generate_chart_analysis(prompt, img):
 
     last_error = None
 
-    # الدوران على المفاتيح أولاً
+    # التدوير عبر مفاتيح API
     for key_idx, key in enumerate(API_KEYS):
         try:
             genai.configure(api_key=key)
         except Exception as config_err:
             continue
 
-        # تجريب النماذج المستقرة على المفتاح الحالي
         for model_name in STABLE_MODELS:
             try:
                 model = genai.GenerativeModel(model_name)
@@ -278,16 +277,12 @@ def generate_chart_analysis(prompt, img):
                 logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_str}")
                 last_error = err
                 
-                # إذا تجاوز الحصة أو عدد الطلبات (429)، ننتقل فوراً للمفتاح التالي
+                # إذا تجاوز الحصة السريعة (429) ننتقل مباشرة للمفتاح التالي
                 if "429" in err_str or "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
-                    logger.warning(f"تجاوز الحصة للمفتاح #{key_idx + 1}، الانقال للمفتاح التالي...")
+                    logger.warning(f"تجاوز الحصة للمفتاح #{key_idx + 1}، الانتقال للمفتاح التالي...")
                     break
-                
-                # إذا كان 404 (النموذج غير موجود)، الانتقال للنموذج التالي على نفس المفتاح
-                if "404" in err_str or "not found" in err_str.lower():
-                    continue
 
-    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح والنماذج. آخر خطأ: {last_error}")
+    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح. آخر خطأ: {last_error}")
 
 # === المعالجات والأوامر ===
 @bot.message_handler(commands=['start'])
