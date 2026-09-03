@@ -15,23 +15,26 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from io import BytesIO
 from PIL import Image
 
-# === إعداد نظام المراقبة ===
+# === إعداد نظام المراقبة وتسجيل الأخطاء ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# === إعدادات النظام والمفاتيح Multi-API Keys ===
+# === إعدادات البيئة والمفاتيح ===
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRAM_TOKEN') or os.environ.get('BOT_TOKEN')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
-# قراءة مفاتيح API المتعددة المفصولة بفاصلة
+# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح يبدأ بـ AIza/aiza
 raw_keys = os.environ.get('GEMINI_API_KEYS') or os.environ.get('GEMINI_API_KEY') or ''
-API_KEYS = [k.strip() for k in raw_keys.split(',') if k.strip()]
+API_KEYS = [
+    k.strip() for k in raw_keys.split(',') 
+    if k.strip() and not k.strip().lower().startswith('aiza')
+]
 
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات Render.")
 
-# إعدادات الأمان
+# إعدادات الأمان المطلقة لضمان معالجة الشارتات والبيانات المالية بدون حجب
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -77,54 +80,66 @@ def update_user(user_id, field, value):
     conn.commit()
     conn.close()
 
-# === نصوص وقوالب اللغات والتحليل الفني (مع تحسين البرومبت) ===
+# === القوالب والبرومبت المؤسسي المطور ===
 TEXTS = {
     'ar': {
-        'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي لتحليل الأسواق المالية والفوركس بأعلى دقة مؤسسية.\n\nالرجاء اختيار لغتك / Choose your language:",
-        'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي شارت مالي (فوركس، ذهب، مؤشرات، كريبتو) للتحليل الاحترافي الآن.",
-        'wait': '⏳ جاري فحص بنية السوق، السيولة، ومستويات العرض والطلب بدقة فائقة... برجاء الانتظار.',
-        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في استغلال الفرص الاحترافية، يرجى الاشتراك للحصول على وصول غير محدود.',
+        'welcome': "مرحباً بك في TradeGuard AI Pro 📈\nالمحرك الذكي المتقدم لتحليل الشارتات المالية بدقة مؤسسية فائقة.\n\nالرجاء اختيار لغتك / Choose your language:",
+        'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي شارت مالي (فوركس، ذهب، مؤشرات، كريبتو) للتحليل المؤسسي الآن.",
+        'wait': '⏳ جاري فحص بنية الشارت، تدفق السيولة، والمحاور السعرية بدقة خبير مالية... برجاء الانتظار.',
+        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في استخدام التحليل المؤسسي، يرجى الاشتراك للحصول على وصول غير محدود.',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
         'sub_info': '💎 **باقات الاشتراك في TradeGuard AI Pro**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n🔹 **اشتراك شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد التحويل، أرسل صورة الإشعار والـ ID الخاص بك (`{user_id}`) للتفعيل الفوري:\n@TradeGuard_Admin',
         'active': 'فعال ✅ (ينتهي في: {end})',
         'inactive': 'غير فعال ❌',
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
-        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك الاحترافي فعال الآن ولغاية تاريخ: `{end_date}`.\nيمكنك الآن إرسال أي عدد من الشارتات للتحليل المتقدم. بالتوفيق والربح الوفير! 📈',
-        'prompt': """أنت محلل أسواق مالية وفوركس مخضرم وحاصل على شهادة CMT مع خبرة مؤسسية تتجاوز 20 عاماً في قراءة حركة السعر (Price Action)، هياكل السيولة (Liquidity Pools)، ومناطق الطلب والعرض (Supply & Demand).
-مهمتك تحليل الشارت المرفق بدقة مطلقة واستخراج حقائق صافية بناءً على الشموع الظاهرة حصراً دون أي افتراضات أو تخيلات وهمية.
+        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال ولغاية: `{end_date}`.\nيمكنك الآن إرسال الشارتات للتحليل المتقدم. بالتوفيق! 📈',
+        'prompt': """أنت خبير اقتصادي عالمي ومحلل كمي حاصل على شهادة Master CMT مع خبرة 25 عاماً في إدارة صناديق التحوط والتداول المؤسسي المتقدم (Smart Money Concepts & Price Action).
+مهمتك إجراء تحليل فني رياضي وحسابي حقيقي للرسم البياني المرفق دون أي تخمين أو استنتاج وهمي.
 
-قواعد صارمة جداً:
-1. إذا لم تكن الصورة لشارت تداول مالي أو شموع يابانية واضحة، اكتب حرفياً وبدون إضافات: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية أو سوق مالي."
-2. اعتمد على الأسعار والقمم والقعور المرئية بدقة بالغة من على المحاور الظاهرة بالشارت.
-3. تنبيه حاسم لسرقة السيولة (Liquidity Sweep): إذا لاحظت وجود ذيول شموع طويلة جداً (Spikes/Wicks) تم رفضها بقوة من القمم أو القيعان، قم بتقييمها كإشارات صيد سيولة وانعكاس محتمل وليست مجرد استمرار للاتجاه.
-4. قدم تحليلاً مؤسسياً احترافياً متكاملأً باللغة العربية حصراً وبدون أي مقدمات أو تكرار أو مسودات تفكير، مستخدماً القالب التالي تماماً:
+التعليمات والقواعد الصارمة للغاية:
+1. الفحص الهيكلي الإجباري: قم بمطابقة المحور السعري الرأسي والمحور الزمني الأفقي. إذا لم تكن الصورة عبارة عن رسم بياني مالي واضح يضم شموعاً يابانية ومحور أسعار مرئي، أرجع الرسالة التالية حصراً:
+"⚠️ عذراً، هذه الصورة لا تطابق رسم بياني لشموع يابانية أو سوق مالي مرئي المحاور."
+
+2. الدقة الرقمية الصارمة: يمنع منعاً باتاً تخمين أو افتراض أي أسعار. يجب أن تعتمد كافة الأرقام والمستويات (الدعوم، المقاومات، الأهداف، ووقف الخسارة) حصرياً على الأرقام الظاهرة صراحة على المحور السعري للشارت.
+
+3. معايير التحليل المؤسسي (SMC / Price Action):
+- تحديد بنية السوق: كسر الهيكل (BOS) أو تغيير الطبيعة (CHOCH).
+- صيد السيولة (Liquidity Sweep): تقييم الذرى والتيارات الذيلية (Spikes/Wicks) والرفض السعري.
+- كتل الطلبات Order Blocks والفجوات السعرية (FVG): تحديد مناطق العرض والطلب الناتجة عن السيولة الذكية.
+
+4. صيغة التقرير المطلوبة (التزام كامل بالقالب التالي بدون أي مقدمات أو مسودات تفكير):
 
 1. هيكل السوق والاتجاه المسيطر:
-- الإطار الزمني المقدر ونوع الاتجاه (صاعد/هابط/عرضي مع ذكر السبب البنيوي للشموع والسيولة).
+- الإطار الزمني المقدر والاتجاه (صاعد/هابط/عرضي) مع التبرير الهيكلي الدقيق المعتمد على حركة الشموع والسيولة.
 
-2. مناطق السيولة ومستويات العرض والطلب:
-- مناطق العرض الرئيسية: (الأسعار والأسباب الفنية بدقة)
-- مناطق الطلب الرئيسية: (الأسعار والأسباب الفنية بدقة)
+2. بنية السيولة ومناطق العرض والطلب (Order Blocks & FVG):
+- مناطق العرض الرئيسية: (الأسعار الدقيقة الظاهرة على المحور مع السبب)
+- مناطق الطلب الرئيسية: (الأسعار الدقيقة الظاهرة على المحور مع السبب)
+- نقاط صيد السيولة (Liquidity Sweeps): (إن وجدت، مع تحديد مستواها السعري)
 
-3. أقوى المقاومات والدعوم الحقيقية:
-- المقاومة المحورية: (السعر بدقة)
-- الدعم المحوري: (السعر بدقة)
+3. المستويات المحورية (Pivot Points):
+- المقاومة المحورية الرئيسية: (السعر المباشر من الشارت)
+- الدعم المحوري الرئيسي: (السعر المباشر من الشارت)
 
-4. نسبة نجاح واغتنام الفرصة (Probability):
-- (% نسبة مئوية دقيقة ومدروسة بناءً على قوة الانعكاس أو استمرار الزخم)
+4. تقييم الاحتمالية والزخم (Probability Score):
+- نسبة النجاح المئوية بناءً على توافق الاتجاه، السيولة، ومناطق الرفض.
 
-5. الخطة الاستثمارية والتنفيذية (Trade Setup):
+5. صفقة التداول التنفيذية (Institutional Trade Setup):
 - القرار الاستثماري: (شراء Buy / بيع Sell / انتظار ومراقبة Wait)
-- منطقة الدخول المثالية (Entry Zone): (السعر المحدد بدقة)
-- وقف الخسارة الحصين (Stop Loss - SL): (مستوى السعر لمنع الخسارة)
-- أهداف جني الأرباح (Take Profit - TP): (الهدف الأول TP1، الهدف الثاني TP2، الهدف الثالث TP3)
-- إدارة المخاطر الصارمة: (توجيه فني قصير وحازم لإدارة رأس المال وتجنب الانزلاق السعري)"""
+- نقطة الدخول المثالية (Entry Zone): (السعر المحدد بدقة)
+- وقف الخسارة الحصين (Stop Loss - SL): (السعر المحدد لحماية رأس المال)
+- أهداف جني الأرباح (Take Profit Targets):
+  • الهدف الأول (TP1):
+  • الهدف الثاني (TP2):
+  • الهدف الثالث (TP3):
+- نسبة المخاطرة إلى العائد (Risk-to-Reward Ratio): (مثال 1:2.5)
+- توجيه إدارة المخاطر: (إرشادات حازمة لحجم العقود وتجنب الانزلاق السعري)"""
     },
     'en': {
-        'welcome': "Welcome to TradeGuard AI 📈\nYour elite AI institutional advisor for Forex and Financial Markets.\n\nChoose your language / اختر لغتك:",
+        'welcome': "Welcome to TradeGuard AI Pro 📈\nYour elite AI institutional advisor for Forex and Financial Markets.\n\nChoose your language / اختر لغتك:",
         'lang_selected': "English language selected successfully ✅\nSend any financial chart image (Forex, Gold, Indices, Crypto) for professional analysis now.",
-        'wait': '⏳ Scanning market structure, liquidity pools, and order blocks with high precision... Please wait.',
+        'wait': '⏳ Analyzing chart structure, liquidity pools, and order blocks with institutional precision... Please wait.',
         'no_trials': '⚠️ Free trials ended (3/3). Please subscribe for unlimited institutional-grade analysis.',
         'account': '👤 **Your Account Details**\n\n🆔 User ID: `{user_id}`\n📊 Free Trials Used: {trials}/3\n💎 Subscription: {sub_status}',
         'sub_info': '💎 **TradeGuard AI Pro Subscription Plans**\n\n🔹 **10-Day Plan:** $20 (USDT)\n🔹 **Monthly Plan (30 Days):** $50 (USDT)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send transfer receipt & User ID (`{user_id}`) to Admin for instant activation:\n@TradeGuard_Admin',
@@ -133,35 +148,47 @@ TEXTS = {
         'btn_acc': '👤 My Account',
         'btn_sub': '💎 Subscription',
         'activate_success_user': '🎉 **Subscription Activated!**\n\nActive until: `{end_date}`.\nEnjoy unlimited professional chart analysis! 📈',
-        'prompt': """You are an elite veteran Forex and financial markets technical analyst with 20+ years of institutional experience in Price Action, Liquidity Pools, and Supply & Demand zones.
-Your mission is to analyze the attached chart with absolute precision, extracting pure factual insights based exclusively on visible candles and price action without hallucinations or fake readings.
+        'prompt': """You are a world-class financial market economist and Master CMT technical analyst with 25+ years of institutional hedge fund experience in Smart Money Concepts (SMC) & Price Action.
+Your objective is to provide a purely factual, mathematical, and non-speculative analysis of the attached financial chart.
 
-Strict Rules:
-1. If the image is not a valid candlestick chart or financial graph, reply ONLY: "⚠️ Sorry, this image is not a candlestick chart or financial market graph."
-2. Base all price levels, swing highs, and swing lows strictly on the visible axis numbers.
-3. Liquidity Sweep Warning: If long wicks or spikes show sharp price rejection, treat them as liquidity sweeps and potential reversals, not trend continuations.
-4. Output ONLY in English using this exact template with NO preambles, chain-of-thought, or markdown meta-text:
+Strict Instructions:
+1. First Validation: Check vertical price axis & horizontal time axis. If the image is NOT a valid candlestick price chart, reply ONLY:
+"⚠️ Sorry, this image is not a valid financial candlestick chart with visible price axes."
+
+2. Absolute Price Accuracy: DO NOT hallucinate or guess price levels. Every single price level (highs, lows, supports, resistances, SL, TPs) MUST be derived directly from the visible numbers on the price scale.
+
+3. Institutional SMC & Price Action Rules:
+- Identify BOS (Break of Structure) or CHOCH (Change of Character).
+- Spot Liquidity Sweeps (long wicks, spikes, price rejection).
+- Locate Order Blocks (Demand/Supply) and Fair Value Gaps (FVG).
+
+4. Required Output Format (Output ONLY this structured report with zero preambles or chain-of-thought):
 
 1. Market Structure & Dominant Trend:
-- Estimated timeframe and trend direction (Bullish/Bearish/Consolidation with structural reasoning).
+- Estimated Timeframe and Direction (Bullish/Bearish/Ranging) supported by visible price structure.
 
-2. Liquidity & Supply/Demand Zones:
-- Key Supply Zones: (Exact price levels & technical rationale)
-- Key Demand Zones: (Exact price levels & technical rationale)
+2. Liquidity & Supply/Demand Zones (Order Blocks & FVG):
+- Key Supply Zones: (Exact prices visible on the axis & rationale)
+- Key Demand Zones: (Exact prices visible on the axis & rationale)
+- Liquidity Sweeps: (If present, specify price level)
 
-3. Core Support & Resistance:
-- Pivot Resistance: (Exact price)
-- Pivot Support: (Exact price)
+3. Core Pivot Levels:
+- Pivot Resistance: (Exact price from axis)
+- Pivot Support: (Exact price from axis)
 
 4. Trade Probability Score:
-- (% calculated success probability based on momentum and structural confluence)
+- Success Probability (%): Based on confluence of trend, liquidity, and rejection setups.
 
-5. Execution & Trade Setup:
-- Investment Decision: (Buy / Sell / Wait)
-- Optimal Entry Zone: (Exact price level)
-- Stop Loss (SL): (Protected price level)
-- Take Profit Targets (TP): (TP1, TP2, and TP3)
-- Risk Management Note: (Brief, strict risk control directive)"""
+5. Institutional Trade Setup:
+- Action Decision: (Buy / Sell / Wait)
+- Optimal Entry Zone: (Exact price)
+- Protected Stop Loss (SL): (Exact price)
+- Take Profit Targets (TP):
+  • Target 1 (TP1):
+  • Target 2 (TP2):
+  • Target 3 (TP3):
+- Risk-to-Reward Ratio (R:R): (e.g., 1:2.5)
+- Risk Management Directive: (Strict position sizing & slippage advice)"""
     }
 }
 
@@ -178,9 +205,10 @@ def clean_analysis_output(text, target_lang):
     if target_lang == 'ar':
         if "1. هيكل السوق والاتجاه المسيطر:" in text:
             text = "1. هيكل السوق والاتجاه المسيطر:" + text.split("1. هيكل السوق والاتجاه المسيطر:")[-1]
-        elif "1. الاتجاه العام:" in text:
-            text = "1. الاتجاه العام:" + text.split("1. الاتجاه العام:")[-1]
-    
+    else:
+        if "1. Market Structure & Dominant Trend:" in text:
+            text = "1. Market Structure & Dominant Trend:" + text.split("1. Market Structure & Dominant Trend:")[-1]
+
     patterns = [
         r'\(Self-Correction.*?\)',
         r'Strict and professional\?.*?\n',
@@ -223,40 +251,50 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === توليد التحليل الفني مع المداورة التلقائية للمفاتيح (API Key Rotation) ===
+# === محرك التحليل الديناميكي مع المداورة واستبعاد مفاتيح AIza ===
 def generate_chart_analysis(prompt, img):
     if not API_KEYS:
-        raise Exception("لم يتم إعداد مفاتيح GEMINI_API_KEYS في إعدادات البيئة.")
+        raise Exception("لم يتم العثور على مفاتيح صالحة. (تم حظر واستبعاد أي مفاتيح تبدأ بـ AIza).")
 
     last_error = None
 
-    # التكرار على جميع المفاتيح لتجاوز أي مفتاح ينتهي حده
-    for idx, key in enumerate(API_KEYS):
+    # التنقل عبر قائمة المفاتيح النظيفة المعتمدة
+    for key_idx, key in enumerate(API_KEYS):
         try:
             genai.configure(api_key=key)
-            # تم تعديل اسم الموديل لتفادي خطأ 404
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            response = model.generate_content([prompt, img], safety_settings=safety_settings)
             
-            if response and response.text:
-                logger.info(f"✅ تم التحليل بنجاح باستخدام المفتاح رقم ({idx + 1})")
-                return response.text
+            # جلب النماذج المتاحة ديناميكياً بحسب البوت السابق
+            available_models = []
+            try:
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        available_models.append(m.name)
+            except Exception as list_err:
+                logger.warning(f"تعذر استعلام قائمة النماذج للمفتاح #{key_idx + 1}: {list_err}")
 
-        except Exception as e:
-            err_msg = str(e).lower()
-            # تم تصحيح الخطأ الإملائي هنا: err_msg بدلاً من err_str
-            if '429' in err_msg or 'quota' in err_msg or 'resourceexceeded' in err_msg:
-                logger.warning(f"⚠️ المفتاح رقم ({idx + 1}) تجاوز الحد المسموح (429). جاري الانتقال للمفتاح التالي...")
-                last_error = e
-                continue
-            else:
-                logger.error(f"❌ خطأ في المفتاح رقم ({idx + 1}): {e}")
-                last_error = e
-                continue
+            # القائمة الاحتياطية الرسمية المعتمدة
+            if not available_models:
+                available_models = ['models/gemini-2.5-flash', 'models/gemini-2.0-flash', 'models/gemini-1.5-flash']
 
-    raise Exception(f"جميع مفاتيح API المتاحة ({len(API_KEYS)}) مشغولة حالياً أو تجاوزت الحد. التفاصيل: {last_error}")
+            for model_name in available_models:
+                try:
+                    model = genai.GenerativeModel(model_name)
+                    response = model.generate_content([prompt, img], safety_settings=safety_settings)
+                    if response and response.text:
+                        logger.info(f"✅ تم التحليل بنجاح عبر النموذج [{model_name}] بالمفتاح #{key_idx + 1}")
+                        return response.text
+                except Exception as mod_err:
+                    logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {mod_err}")
+                    continue
 
-# === الأوامر والمعالجات ===
+        except Exception as key_err:
+            logger.error(f"خطأ في المفتاح #{key_idx + 1}: {key_err}")
+            last_error = key_err
+            continue
+
+    raise Exception(f"تعذر معالجة الصورة عبر كافة المفاتيح والنماذج المتاحة. آخر خطأ: {last_error}")
+
+# === المعالجات والأوامر ===
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -320,15 +358,11 @@ def admin_activate(message):
         user_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
         bot.send_message(target_user_id, user_msg, parse_mode='Markdown')
     except Exception as e:
-        bot.reply_to(message, f"❌ خطأ في معالجة الأمر: {e}")
+        bot.reply_to(message, f"❌ خطأ: {e}")
 
 # معالج الصور والتحليل الفني
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    if not API_KEYS:
-        bot.reply_to(message, "❌ لم يتم ضبط مفاتيح الذكاء الاصطناعي (GEMINI_API_KEYS) في السيرفر.")
-        return
-
     user = get_user(message.chat.id)
     lang = user[1] if user[1] in TEXTS else 'ar'
     trials, is_sub, end_date_str = user[2], user[3], user[5]
@@ -366,7 +400,7 @@ def handle_photo(message):
 # === تشغيل السيرفر والـ Webhook ===
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI Pro Active & Operational!"
+    return "TradeGuard AI Pro Institutional Edition Active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
