@@ -24,7 +24,7 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRA
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
-# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح يبدأ بـ AIza/aiza واعتماد مفاتيح AQ
+# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح يبدأ بـ AIza/aiza
 raw_keys = os.environ.get('GEMINI_API_KEYS') or os.environ.get('GEMINI_API_KEY') or ''
 API_KEYS = [
     k.strip() for k in raw_keys.split(',') 
@@ -132,7 +132,7 @@ TEXTS = {
 - أهداف جني الأرباح (Take Profit Targets):
   • الهدف الأول (TP1):
   • الهدف الثاني (TP2):
-  • الهدف الثالث (TP3):
+  • Target 3 (TP3):
 - نسبة المخاطرة إلى العائد (Risk-to-Reward Ratio): (مثال 1:2.5)
 - توجيه إدارة المخاطر: (إرشادات حازمة لحجم العقود وتجنب الانزلاق السعري)"""
     },
@@ -248,24 +248,47 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === المحرك الجديد الحصري والمستقر (لا مزيد من الأخطاء العشوائية) ===
+# === محرك اختيار النماذج المتطور (يدعم 2.5 و 2.0 و 3.x والديناميكي) ===
 def generate_chart_analysis(prompt, img):
     if not API_KEYS:
-        raise Exception("لم يتم العثور على مفاتيح صالحة. (تأكد من إدخال المفاتيح بشكل صحيح في بيئة ريندر).")
+        raise Exception("لم يتم العثور على مفاتيح صالحة.")
 
     last_error = None
-    
-    # [الحل الجذري]: بدلاً من جلب النماذج العشوائية التي تسبب أخطاء 404 و 429، 
-    # قمنا بتثبيت النماذج الرسمية المستقرة الخاصة بتحليل الصور.
-    stable_models = ['gemini-1.5-flash', 'gemini-1.5-pro']
+
+    # ترتيب النماذج بدءاً من الإصدارات الحديثة والمدعومة بمفاتيح AQ
+    default_candidates = [
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-exp',
+        'gemini-1.5-flash-8b',
+        'gemini-1.5-flash',
+        'gemini-1.5-pro'
+    ]
 
     for key_idx, key in enumerate(API_KEYS):
         try:
             genai.configure(api_key=key)
             
-            for model_name in stable_models:
+            # جلب النماذج المتاحة من جوجل لهذا المفتاح تحديداً
+            key_models = []
+            try:
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        clean_m = m.name.replace('models/', '')
+                        if 'text-embedding' not in clean_m and 'imagen' not in clean_m:
+                            key_models.append(clean_m)
+            except Exception as list_err:
+                logger.warning(f"تعذر استعلام النماذج للمفتاح #{key_idx + 1}: {list_err}")
+
+            # دمج قائمة المفتاح مع القائمة الافتراضية
+            models_to_try = []
+            for m in key_models + default_candidates:
+                if m not in models_to_try:
+                    models_to_try.append(m)
+
+            for model_name in models_to_try:
                 try:
-                    time.sleep(1.5) # فاصل زمني بسيط لمنع حظر الطلبات المتكررة
+                    time.sleep(1) # فاصل زمني لتجنب الضغط
                     model = genai.GenerativeModel(model_name)
                     response = model.generate_content([prompt, img], safety_settings=safety_settings)
                     
@@ -274,10 +297,10 @@ def generate_chart_analysis(prompt, img):
                         return response.text
                         
                 except Exception as mod_err:
-                    error_str = str(mod_err)
-                    logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {error_str}")
+                    err_text = str(mod_err)
+                    logger.warning(f"تجاوز النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_text}")
                     last_error = mod_err
-                    # في حال واجه خطأ ضغط شبكة ينتقل للنموذج التالي بسلاسة
+                    # الانتقال التلقائي للنموذج التالي عند حدوث 404 أو 429
                     continue
 
         except Exception as key_err:
@@ -285,7 +308,7 @@ def generate_chart_analysis(prompt, img):
             last_error = key_err
             continue
 
-    raise Exception(f"جميع المفاتيح المتاحة ({len(API_KEYS)}) مستهلكة حالياً. آخر خطأ تم تسجيله: {last_error}")
+    raise Exception(f"تعذر معالجة الطلب عبر جميع المفاتيح. آخر خطأ: {last_error}")
 
 # === المعالجات والأوامر ===
 @bot.message_handler(commands=['start'])
