@@ -24,11 +24,11 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRA
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
-# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح يبدأ بـ AIza/aiza
+# قراءة مفاتيح API وتطبيق الفلتر الصارم لاستبعاد أي مفتاح غير صالح
 raw_keys = os.environ.get('GEMINI_API_KEYS') or os.environ.get('GEMINI_API_KEY') or ''
 API_KEYS = [
     k.strip() for k in raw_keys.split(',') 
-    if k.strip() and not k.strip().lower().startswith('aiza')
+    if k.strip() and not k.strip().lower().startswith('aiza_invalid')
 ]
 
 if not TELEGRAM_TOKEN:
@@ -248,20 +248,25 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === محرك التحليل الآمن والسريع (بدون تجريب النماذج الفردية أو استنزاف الحصة) ===
-STABLE_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+# === محرك التحليل المحسن (تحديث النماذج والتنقل الذكي بين المفاتيح) ===
+STABLE_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
 
 def generate_chart_analysis(prompt, img):
     if not API_KEYS:
-        raise Exception("لم يتم العثور على مفاتيح صالحة.")
+        raise Exception("لم يتم العثور على مفاتيح API صالحة.")
 
     last_error = None
 
-    # الدوران على النماذج الرسمية المستقرة فقط، وتمرير المفاتيح عليها دون حرق الحصة
-    for model_name in STABLE_MODELS:
-        for key_idx, key in enumerate(API_KEYS):
+    # الدوران على المفاتيح أولاً
+    for key_idx, key in enumerate(API_KEYS):
+        try:
+            genai.configure(api_key=key)
+        except Exception as config_err:
+            continue
+
+        # تجريب النماذج المستقرة على المفتاح الحالي
+        for model_name in STABLE_MODELS:
             try:
-                genai.configure(api_key=key)
                 model = genai.GenerativeModel(model_name)
                 response = model.generate_content([prompt, img], safety_settings=safety_settings)
                 
@@ -270,16 +275,19 @@ def generate_chart_analysis(prompt, img):
                     return response.text
             except Exception as err:
                 err_str = str(err)
-                logger.warning(f"تجاوز النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_str}")
+                logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_str}")
                 last_error = err
                 
-                # إذا كان الخطأ 404 (النموذج غير مدعوم على هذه البيئة)، ننتقل للنموذج التالي فوراً
-                if "404" in err_str:
+                # إذا تجاوز الحصة أو عدد الطلبات (429)، ننتقل فوراً للمفتاح التالي
+                if "429" in err_str or "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
+                    logger.warning(f"تجاوز الحصة للمفتاح #{key_idx + 1}، الانقال للمفتاح التالي...")
                     break
-                # إذا كان 429 (تجاوز معدل الطلبات للرمز الحالي)، ينتقل للمفتاح التالي فوراً
-                continue
+                
+                # إذا كان 404 (النموذج غير موجود)، الانتقال للنموذج التالي على نفس المفتاح
+                if "404" in err_str or "not found" in err_str.lower():
+                    continue
 
-    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح. آخر خطأ: {last_error}")
+    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح والنماذج. آخر خطأ: {last_error}")
 
 # === المعالجات والأوامر ===
 @bot.message_handler(commands=['start'])
