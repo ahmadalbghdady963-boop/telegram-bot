@@ -234,7 +234,8 @@ def generate_chart_analysis(prompt, img):
     for idx, key in enumerate(API_KEYS):
         try:
             genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # تم تعديل اسم الموديل لتفادي خطأ 404
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
             response = model.generate_content([prompt, img], safety_settings=safety_settings)
             
             if response and response.text:
@@ -243,7 +244,8 @@ def generate_chart_analysis(prompt, img):
 
         except Exception as e:
             err_msg = str(e).lower()
-            if '429' in err_msg or 'quota' in err_str or 'resourceexceeded' in err_msg:
+            # تم تصحيح الخطأ الإملائي هنا: err_msg بدلاً من err_str
+            if '429' in err_msg or 'quota' in err_msg or 'resourceexceeded' in err_msg:
                 logger.warning(f"⚠️ المفتاح رقم ({idx + 1}) تجاوز الحد المسموح (429). جاري الانتقال للمفتاح التالي...")
                 last_error = e
                 continue
