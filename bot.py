@@ -248,41 +248,85 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === تحديث النموذج إلى الإصدار المعين في API الحديثة ===
-STABLE_MODELS = ['gemini-3.6-flash']
+# === تحديث قائمة النماذج الاحتياطية لسلسلة 3.x الرسمية ===
+CANDIDATE_MODELS = [
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5-pro'
+]
 
 def generate_chart_analysis(prompt, img):
     if not API_KEYS:
-        raise Exception("لم يتم العثور على مفاتيح API صالحة.")
+        raise Exception("لم يتم العثور على مفاتيح API صالحة في متغيرات البيئة.")
 
-    last_error = None
+    last_error = "لم تتم المحاولة بعد."
 
-    # التدوير عبر مفاتيح API
     for key_idx, key in enumerate(API_KEYS):
         try:
             genai.configure(api_key=key)
-        except Exception as config_err:
-            continue
-
-        for model_name in STABLE_MODELS:
+            
+            # استكشاف النماذج المدعومة ديناميكياً لكل مفتاح
+            discovered_models = []
             try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content([prompt, img], safety_settings=safety_settings)
-                
-                if response and response.text:
-                    logger.info(f"✅ تم التحليل بنجاح عبر النموذج [{model_name}] بالمفتاح #{key_idx + 1}")
-                    return response.text
-            except Exception as err:
-                err_str = str(err)
-                logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_str}")
-                last_error = err
-                
-                # إذا تجاوز الحصة السريعة (429) ننتقل مباشرة للمفتاح التالي
-                if "429" in err_str or "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
-                    logger.warning(f"تجاوز الحصة للمفتاح #{key_idx + 1}، الانتقال للمفتاح التالي...")
-                    break
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        clean_name = m.name.replace('models/', '')
+                        discovered_models.append(clean_name)
+            except Exception as list_err:
+                logger.warning(f"تعذر جلب قائمة النماذج للمفتاح #{key_idx + 1}: {list_err}")
 
-    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح. آخر خطأ: {last_error}")
+            # بناء قائمة التجربة مع التركيز على الإصدارات النشطة 3.x
+            models_to_try = [m for m in discovered_models if '3.6' in m or '3.5' in m]
+            for cand in CANDIDATE_MODELS:
+                if cand not in models_to_try:
+                    models_to_try.append(cand)
+
+            for model_name in models_to_try:
+                try:
+                    logger.info(f"محاولة التحليل بالمفتاح #{key_idx + 1} والنموذج [{model_name}]...")
+                    model = genai.GenerativeModel(model_name)
+                    
+                    response = model.generate_content(
+                        [prompt, img], 
+                        safety_settings=safety_settings,
+                        request_options={'timeout': 25}
+                    )
+                    
+                    if response and response.text:
+                        logger.info(f"✅ تم التحليل بنجاح عبر [{model_name}] بالمفتاح #{key_idx + 1}")
+                        return response.text
+                except Exception as err:
+                    err_str = str(err)
+                    logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_str}")
+                    last_error = err_str
+                    
+                    if "429" in err_str or "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
+                        logger.warning(f"تجاوز الحصة للمفتاح #{key_idx + 1}، الانتقال للمفتاح التالي...")
+                        break
+        except Exception as key_err:
+            logger.warning(f"خطأ إعداد المفتاح #{key_idx + 1}: {key_err}")
+            last_error = str(key_err)
+
+    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح والنماذج. آخر خطأ: {last_error}")
+
+# === المعالجة المستقلة للصور في خيط خلفي لمنع التجمد ===
+def process_photo_async(message, lang):
+    status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
+    try:
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        img = Image.open(BytesIO(downloaded_file))
+        
+        analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
+        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
+        
+        user = get_user(message.chat.id)
+        if not user[3]: # غير مشترك
+            update_user(message.chat.id, 'trials', user[2] + 1)
+
+    except Exception as e:
+        logger.error(f"خطأ المعالجة الخلفية: {traceback.format_exc()}")
+        safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
 
 # === المعالجات والأوامر ===
 @bot.message_handler(commands=['start'])
@@ -368,22 +412,7 @@ def handle_photo(message):
         bot.reply_to(message, TEXTS[lang]['no_trials'], parse_mode='Markdown')
         return
 
-    status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
-    
-    try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        img = Image.open(BytesIO(downloaded_file))
-        
-        analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
-        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
-        
-        if not is_sub:
-            update_user(message.chat.id, 'trials', trials + 1)
-
-    except Exception as e:
-        logger.error(f"Error: {traceback.format_exc()}")
-        safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
+    threading.Thread(target=process_photo_async, args=(message, lang), daemon=True).start()
 
 # === تشغيل السيرفر والـ Webhook ===
 @app.route('/', methods=['GET'])
