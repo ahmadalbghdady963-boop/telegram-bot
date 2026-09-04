@@ -6,7 +6,7 @@ import pytz
 import logging
 import traceback
 import re
-import threading
+from concurrent.futures import ThreadPoolExecutor
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask, request
@@ -14,7 +14,6 @@ import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from io import BytesIO
 from PIL import Image
-import yfinance as yf
 
 # === إعداد نظام المراقبة وتسجيل الأخطاء ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -25,7 +24,6 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRA
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
-# قراءة مفاتيح API وتطبيق الفلتر لاستبعاد المفاتيح التالفة
 raw_keys = os.environ.get('GEMINI_API_KEYS') or os.environ.get('GEMINI_API_KEY') or ''
 API_KEYS = [
     k.strip() for k in raw_keys.split(',') 
@@ -33,9 +31,8 @@ API_KEYS = [
 ]
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات Render.")
+    raise ValueError("❌ خطأ حرج: توكن تليجرام مفقود في إعدادات البيئة.")
 
-# إعدادات الأمان المطلقة
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -43,191 +40,165 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# === تهيئة البوت والسيرفر ===
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 app = Flask(__name__)
+executor = ThreadPoolExecutor(max_workers=5)
+
+# === قاموس مؤقت لتخزين الصورة الأولى لكل مستخدم ===
+USER_CHARTS_CACHE = {}
 
 # === إدارة قاعدة البيانات ===
+DB_FILE = 'tradeguard.db'
+
 def get_db_connection():
-    return sqlite3.connect('tradeguard.db', check_same_thread=False, timeout=10)
+    conn = sqlite3.connect(DB_FILE, timeout=15)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
 
 def init_db():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER PRIMARY KEY, lang TEXT, trials INTEGER, 
-                  is_sub INTEGER, start_date TEXT, end_date TEXT)''')
-    conn.commit()
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users
+                     (user_id INTEGER PRIMARY KEY, lang TEXT, trials INTEGER, 
+                      is_sub INTEGER, start_date TEXT, end_date TEXT)''')
+        conn.commit()
 
 init_db()
 
 def get_user(user_id):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT user_id, lang, trials, is_sub, start_date, end_date FROM users WHERE user_id=?", (user_id,))
-    user = c.fetchone()
-    if not user:
-        c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", (user_id, 'ar', 0, 0, '', ''))
-        conn.commit()
-        user = (user_id, 'ar', 0, 0, '', '')
-    conn.close()
-    return user
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT user_id, lang, trials, is_sub, start_date, end_date FROM users WHERE user_id=?", (user_id,))
+        user = c.fetchone()
+        if not user:
+            c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", (user_id, 'ar', 0, 0, '', ''))
+            conn.commit()
+            user = (user_id, 'ar', 0, 0, '', '')
+        return user
 
 def update_user(user_id, field, value):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
-    conn.commit()
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute(f"UPDATE users SET {field}=? WHERE user_id=?", (value, user_id))
+        conn.commit()
 
-# === القوالب والبرومبت ===
+# === القوالب والبرومبت المخصص للتحليل المزدوج (Multi-Timeframe) ===
 TEXTS = {
     'ar': {
-        'welcome': "مرحباً بك في TradeGuard AI Pro 📈\nالمحرك الذكي المتقدم لتحليل الشارتات المالية بدقة مؤسسية فائقة.\n\nالرجاء اختيار لغتك / Choose your language:",
-        'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل أي شارت مالي (فوركس، ذهب، مؤشرات، كريبتو) للتحليل المؤسسي الآن.",
-        'wait': '⏳ جاري فحص بنية الشارت، تدفق السيولة، والمحاور السعرية بدقة خبير مالية... برجاء الانتظار.',
-        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في استخدام التحليل المؤسسي، يرجى الاشتراك للحصول على وصول غير محدود.',
+        'welcome': "مرحباً بك في TradeGuard AI Pro 📈\nنظام التحليل الفني المؤسسي المزدوج (Multi-Timeframe 4H/15M).\n\nالرجاء اختيار لغتك / Choose your language:",
+        'lang_selected': "تم اختيار اللغة العربية بنجاح ✅\nأرسل الآن **الشارت الأول (فريم 4 ساعات 4H)** للبدء.",
+        'first_img_received': "📸 **تم استقبال شارت الفريم الكلي (4H) بنجاح!**\n\nالآن أرسل **الشارت الثاني (فريم 15 دقيقة 15M)** لتأكيد نقطة الدخول وتصفية المخاطر.",
+        'wait': '⏳ جاري الدمج والتحليل المؤسسي المزدوج (4H + 15M) لتأكيد منطقة الدخول بدقة فائقة... برجاء الانتظار.',
+        'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار في استخدام التحليل المتقدم، يرجى الاشتراك.',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
         'sub_info': '💎 **باقات الاشتراك في TradeGuard AI Pro**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n🔹 **اشتراك شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد التحويل، أرسل صورة الإشعار والـ ID الخاص بك (`{user_id}`) للتفعيل الفوري:\n@TradeGuard_Admin',
         'active': 'فعال ✅ (ينتهي في: {end})',
         'inactive': 'غير فعال ❌',
         'btn_acc': '👤 حسابي',
         'btn_sub': '💎 الاشتراك',
-        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال ولغاية: `{end_date}`.\nيمكنك الآن إرسال الشارتات للتحليل المتقدم. بالتوفيق! 📈',
-        'prompt': """أنت خبير اقتصادي عالمي ومحلل كمي حاصل على شهادة Master CMT مع خبرة 25 عاماً في إدارة صناديق التحوط والتداول المؤسسي المتقدم (Smart Money Concepts & Price Action).
-مهمتك إجراء تحليل فني رياضي وحسابي حقيقي للرسم البياني المرفق دون أي تخمين أو استنتاج وهمي.
+        'btn_reset': '🔄 إعادة رفع شارت جديد',
+        'reset_msg': 'تم مسح الشارت المرفوع سابقاً. يمكنك الآن إرسال **الشارت الأول (فريم 4H)** من جديد.',
+        'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال ولغاية: `{end_date}`. بالتوفيق! 📈',
+        'prompt': """أنت محترف تداول مؤسسي ومحلل كمي مالي متخصص في التداول عبر الأطر الزمنية المتقاطعة (Multi-Timeframe Analysis - SMC & Price Action).
 
-بيانات السوق المباشرة المستخرجة:
-{live_data}
+أمامك صورتان لشارتات نفس الزوج/الأصل المالي:
+1. الصورة الأولى: الشارت ذو الإطار الزمني الأكبر (فريم 4 ساعات 4H) لتحديد الاتجاه العام وهيكل السيولة العالي.
+2. الصورة الثانية: الشارت ذو الإطار الزمني الأصغر (فريم 15 دقيقة 15M) لتحديد التمركز الدقيق، الرفض، ونقطة الدخول المثالية بمخاطرة دنيا.
 
-التعليمات والقواعد الصارمة للغاية:
-1. الفحص الهيكلي الإجباري: قم بمطابقة المحور السعري الرأسي والمحور الزمني الأفقي مع البيانات المباشرة أعلاه. إذا لم تكن الصورة عبارة عن رسم بياني مالي واضح، أرجع الرسالة التالية حصراً:
-"⚠️ عذراً، هذه الصورة لا تطابق رسم بياني لشموع يابانية أو سوق مالي مرئي المحاور."
+التعليمات والقواعد الصارمة:
+1. مطابقة التحليل: قم بالربط المباشر بين الاتجاه في فريم 4H ومناطق الدخول الفرعية في فريم 15M. إذا وجد تعارض واضح أو خطورة، أبلغ المستخدم بضرورة "الانتظار وعدم التداول".
+2. الدقة الرقمية المطلقة: لا تقم بتخمين أي أسعار. استخرج جميع مستويات الأسعار، الـ SL والـ TP مباشرة من الأرقام المرئية على المحاور السعرية للصورة الثانية (15M) المتطابقة مع سياق الصورة الأولى (4H).
+3. تقليل المخاطر: يجب أن يكون وقف الخسارة محكم وضيق بناءً على هيكل فريم 15M لحماية رأس المال وتقديم نسبة مخاطرة إلى عائد ممتازة (Risk-to-Reward >= 1:2).
 
-2. الدقة الرقمية الصارمة: يمنع منعاً باتاً تخمين أو افتراض أي أسعار. يجب أن تعتمد كافة الأرقام والمستويات (الدعوم، المقاومات، الأهداف، ووقف الخسارة) حصرياً على الأرقام الظاهرة صراحة على المحور السعري للشارت والسوق الحقيقي.
+أخرج التقرير النهائي مباشرة وبشكل منظم بالصيغة التالية دون أي تفكير جانبي:
 
-3. معايير التحليل المؤسسي (SMC / Price Action):
-- تحديد بنية السوق: كسر الهيكل (BOS) أو تغيير الطبيعة (CHOCH).
-- صيد السيولة (Liquidity Sweep): تقييم الذرى والتيارات الذيلية (Spikes/Wicks) والرفض السعري.
-- كتل الطلبات Order Blocks والفجوات السعرية (FVG): تحديد مناطق العرض والطلب الناتجة عن السيولة الذكية.
+1. تحليل سياق الاتجاه العام (4H Context):
+- اتجاه الهيكل (صاعد/هابط/عرضي) ومناطق العرض/الطلب الكلية المعلمة على فريم 4H.
 
-4. صيغة التقرير المطلوبة (التزام كامل بالقالب التالي بدون أي مقدمات أو مسودات تفكير):
+2. تحليل تأكيد الدخول والدقة (15M Refinement):
+- كسر الهيكل الداخلي (mBOS / CHOCH) وسحب السيولة (Liquidity Sweep) على فريم 15M.
 
-1. هيكل السوق والاتجاه المسيطر:
-- الإطار الزمني المقدر والاتجاه (صاعد/هابط/عرضي) مع التبرير الهيكلي الدقيق المعتمد على حركة الشموع والسيولة.
+3. تقييم جودة الصفقة وتصفية المخاطر (Confluence Score):
+- درجة توافق الفريمين المئوية (مثال: 85%) وتأكيد أمان الصفقة.
 
-2. بنية السيولة ومناطق العرض والطلب (Order Blocks & FVG):
-- مناطق العرض الرئيسية: (الأسعار الدقيقة الظاهرة على المحور مع السبب)
-- مناطق الطلب الرئيسية: (الأسعار الدقيقة الظاهرة على المحور مع السبب)
-- نقاط صيد السيولة (Liquidity Sweeps): (إن وجدت، مع تحديد مستواها السعري)
-
-3. المستويات المحورية (Pivot Points):
-- المقاومة المحورية الرئيسية: (السعر المباشر من الشارت)
-- الدعم المحوري الرئيسي: (السعر المباشر من الشارت)
-
-4. تقييم الاحتمالية والزخم (Probability Score):
-- نسبة النجاح المئوية بناءً على توافق الاتجاه، السيولة، ومناطق الرفض.
-
-5. صفقة التداول التنفيذية (Institutional Trade Setup):
-- القرار الاستثماري: (شراء Buy / بيع Sell / انتظار ومراقبة Wait)
-- نقطة الدخول المثالية (Entry Zone): (السعر المحدد بدقة)
-- وقف الخسارة الحصين (Stop Loss - SL): (السعر المحدد لحماية رأس المال)
+4. صفقة التداول التنفيذية المتقاطعة (Multi-Timeframe Trade Setup):
+- القرار: (شراء Buy / بيع Sell / انتظار وعدم دخول Wait)
+- نطاق الدخول الدقيق (Optimal Entry Zone - 15M): (سعر محدد)
+- وقف الخسارة الحصين (Stop Loss - SL): (سعر دقيق جداً أسفل/أعلى هيكل الـ 15M)
 - أهداف جني الأرباح (Take Profit Targets):
-  • الهدف الأول (TP1):
-  • الهدف الثاني (TP2):
-  • الهدف الثالث (TP3):
-- نسبة المخاطرة إلى العائد (Risk-to-Reward Ratio): (مثال 1:2.5)
-- توجيه إدارة المخاطر: (إرشادات حازمة لحجم العقود وتجنب الانزلاق السعري)"""
+  • Target 1 (TP1):
+  • Target 2 (TP2):
+  • Target 3 (TP3):
+- نسبة المخاطرة إلى العائد (Risk-to-Reward Ratio):
+- نصيحة إدارة المخاطر وتصفية الخسارة:"""
     },
     'en': {
-        'welcome': "Welcome to TradeGuard AI Pro 📈\nYour elite AI institutional advisor for Forex and Financial Markets.\n\nChoose your language / اختر لغتك:",
-        'lang_selected': "English language selected successfully ✅\nSend any financial chart image (Forex, Gold, Indices, Crypto) for professional analysis now.",
-        'wait': '⏳ Analyzing chart structure, liquidity pools, and order blocks with institutional precision... Please wait.',
-        'no_trials': '⚠️ Free trials ended (3/3). Please subscribe for unlimited institutional-grade analysis.',
+        'welcome': "Welcome to TradeGuard AI Pro 📈\nMulti-Timeframe Institutional Engine (4H/15M).\n\nChoose language / اختر لغتك:",
+        'lang_selected': "English selected successfully ✅\nSend your **First Chart (4-Hour / 4H Frame)** now.",
+        'first_img_received': "📸 **Higher Timeframe (4H) Received!**\n\nNow send the **Second Chart (15-Minute / 15M Frame)** to pinpoint execution.",
+        'wait': '⏳ Executing Multi-Timeframe Analysis (4H + 15M) for zero-risk optimal entry... Please wait.',
+        'no_trials': '⚠️ Free trials ended (3/3). Please subscribe for full access.',
         'account': '👤 **Your Account Details**\n\n🆔 User ID: `{user_id}`\n📊 Free Trials Used: {trials}/3\n💎 Subscription: {sub_status}',
         'sub_info': '💎 **TradeGuard AI Pro Subscription Plans**\n\n🔹 **10-Day Plan:** $20 (USDT)\n🔹 **Monthly Plan (30 Days):** $50 (USDT)\n\n📥 **Payment Address (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send transfer receipt & User ID (`{user_id}`) to Admin for instant activation:\n@TradeGuard_Admin',
         'active': 'Active ✅ (Expires: {end})',
         'inactive': 'Inactive ❌',
         'btn_acc': '👤 My Account',
         'btn_sub': '💎 Subscription',
-        'activate_success_user': '🎉 **Subscription Activated!**\n\nActive until: `{end_date}`.\nEnjoy unlimited professional chart analysis! 📈',
-        'prompt': """You are a world-class financial market economist and Master CMT technical analyst with 25+ years of institutional hedge fund experience in Smart Money Concepts (SMC) & Price Action.
-Your objective is to provide a purely factual, mathematical, and non-speculative analysis of the attached financial chart.
+        'btn_reset': '🔄 Reset Chart Upload',
+        'reset_msg': 'Previous chart cleared. Send your **First Chart (4H)** again.',
+        'activate_success_user': '🎉 **Subscription Activated!**\n\nActive until: `{end_date}`. Good luck! 📈',
+        'prompt': """You are an institutional quantitative trader specializing in Multi-Timeframe Analysis (SMC & Price Action).
 
-Live Market Data Context:
-{live_data}
+You are given TWO charts:
+1. Image 1: Higher Timeframe (4-Hour / 4H) for macro trend and key Order Blocks.
+2. Image 2: Lower Timeframe (15-Minute / 15M) for precise entry trigger and risk minimization.
 
-Strict Instructions:
-1. First Validation: Check vertical price axis & horizontal time axis. If the image is NOT a valid candlestick price chart, reply ONLY:
-"⚠️ Sorry, this image is not a valid financial candlestick chart with visible price axes."
+Instructions:
+1. Align 4H trend context with 15M lower timeframe structure. If there is a contradiction, signal "WAIT / NO TRADE".
+2. Absolute Price Accuracy: Extract exact price levels from image 2 (15M) visible axes aligned with image 1 context.
+3. Tight Risk Control: Set SL strictly based on 15M micro structure for minimum drawdown and high Risk-to-Reward.
 
-2. Absolute Price Accuracy: DO NOT hallucinate or guess price levels. Every single price level (highs, lows, supports, resistances, SL, TPs) MUST be derived directly from the visible numbers on the price scale.
+Output Format (No preamble):
 
-3. Institutional SMC & Price Action Rules:
-- Identify BOS (Break of Structure) or CHOCH (Change of Character).
-- Spot Liquidity Sweeps (long wicks, spikes, price rejection).
-- Locate Order Blocks (Demand/Supply) and Fair Value Gaps (FVG).
+1. Macro Trend Context (4H):
+- Structural Direction & Major Supply/Demand Zones on 4H.
 
-4. Required Output Format (Output ONLY this structured report with zero preambles or chain-of-thought):
+2. Lower Timeframe Refinement (15M):
+- Internal BOS/CHOCH and Liquidity Sweeps on 15M.
 
-1. Market Structure & Dominant Trend:
-- Estimated Timeframe and Direction (Bullish/Bearish/Ranging) supported by visible price structure.
+3. Confluence & Risk Score:
+- Alignment Score (%) and safety confirmation.
 
-2. Liquidity & Supply/Demand Zones (Order Blocks & FVG):
-- Key Supply Zones: (Exact prices visible on the axis & rationale)
-- Key Demand Zones: (Exact prices visible on the axis & rationale)
-- Liquidity Sweeps: (If present, specify price level)
-
-3. Core Pivot Levels:
-- Pivot Resistance: (Exact price from axis)
-- Pivot Support: (Exact price from axis)
-
-4. Trade Probability Score:
-- Success Probability (%): Based on confluence of trend, liquidity, and rejection setups.
-
-5. Institutional Trade Setup:
-- Action Decision: (Buy / Sell / Wait)
-- Optimal Entry Zone: (Exact price)
-- Protected Stop Loss (SL): (Exact price)
+4. Multi-Timeframe Trade Setup:
+- Action: (Buy / Sell / Wait)
+- Optimal Entry Zone (15M): (Exact price)
+- Protected Stop Loss (SL): (Tight price from 15M)
 - Take Profit Targets (TP):
   • Target 1 (TP1):
   • Target 2 (TP2):
   • Target 3 (TP3):
-- Risk-to-Reward Ratio (R:R): (e.g., 1:2.5)
-- Risk Management Directive: (Strict position sizing & slippage advice)"""
+- Risk-to-Reward Ratio:
+- Risk Management Directive:"""
     }
 }
 
 def get_main_keyboard(lang):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton(TEXTS[lang]['btn_acc']), KeyboardButton(TEXTS[lang]['btn_sub']))
+    markup.add(KeyboardButton(TEXTS[lang]['btn_reset']))
     return markup
 
 def clean_analysis_output(text, target_lang):
     if not text:
         return text
-    
     if target_lang == 'ar':
-        if "1. هيكل السوق والاتجاه المسيطر:" in text:
-            text = "1. هيكل السوق والاتجاه المسيطر:" + text.split("1. هيكل السوق والاتجاه المسيطر:")[-1]
+        if "1. تحليل سياق الاتجاه العام" in text:
+            text = "1. تحليل سياق الاتجاه العام" + text.split("1. تحليل سياق الاتجاه العام")[-1]
     else:
-        if "1. Market Structure & Dominant Trend:" in text:
-            text = "1. Market Structure & Dominant Trend:" + text.split("1. Market Structure & Dominant Trend:")[-1]
+        if "1. Macro Trend Context" in text:
+            text = "1. Macro Trend Context" + text.split("1. Macro Trend Context")[-1]
 
-    patterns = [
-        r'\(Self-Correction.*?\)',
-        r'Strict and professional\?.*?\n',
-        r'Order followed\?.*?\n',
-        r'No fluff\?.*?\n',
-        r'Max 350 words\?.*?\n',
-        r'Numbers accurate\?.*?\n',
-        r'Wait, looking closer.*?\n',
-        r'Final Polish.*?\n',
-        r'Resulting analysis:?\n',
-        r'Professional technical analysis system.*?\n',
-        r'Institutional grade analysis.*?\n'
-    ]
+    patterns = [r'\(Self-Correction.*?\)', r'Strict and professional\?.*?\n', r'Order followed\?.*?\n']
     cleaned = text
     for p in patterns:
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
@@ -244,136 +215,65 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=chunk, parse_mode='Markdown')
             else:
                 bot.send_message(chat_id=chat_id, text=chunk, parse_mode='Markdown')
-        except telebot.apihelper.ApiTelegramException as e:
-            error_msg = str(e).lower()
-            if "can't parse entities" in error_msg or "400" in error_msg:
-                try:
-                    if index == 0:
-                        bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=chunk, parse_mode=None)
-                    else:
-                        bot.send_message(chat_id=chat_id, text=chunk, parse_mode=None)
-                except Exception as inner_e:
-                    logger.error(f"Fallback failed: {inner_e}")
+        except telebot.apihelper.ApiTelegramException:
+            try:
+                if index == 0:
+                    bot.edit_message_text(chat_id=chat_id, message_id=status_message_id, text=chunk, parse_mode=None)
+                else:
+                    bot.send_message(chat_id=chat_id, text=chunk, parse_mode=None)
+            except Exception as inner_e:
+                logger.error(f"Fallback send failed: {inner_e}")
 
-# === النماذج الاحتياطية المخصصة للتحليل البصري والشارتات ===
-PREFERRED_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro',
-    'gemini-2.0-flash'
-]
+TARGET_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro']
 
-def fetch_live_market_data(img, key):
-    try:
-        genai.configure(api_key=key)
-        # استخدام نموذج سريع وخفيف لاستخراج الرمز المالي
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        res = model.generate_content(["Extract ONLY the financial symbol (e.g. EURUSD=X, XAUUSD=X, BTC-USD). Reply ONLY symbol or UNKNOWN.", img])
-        symbol = res.text.strip().upper() if res and res.text else "UNKNOWN"
-        
-        if "UNKNOWN" in symbol or not symbol:
-            return "بيانات السوق الحية غير متوفرة لهذا الرسم البياني."
-            
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period="2d")
-        if df.empty:
-            return f"الرمز {symbol}، ولكن لم يتم جلب أسعار سريعة."
-            
-        last = df.iloc[-1]
-        return f"الرمز: {symbol} | سعر الإغلاق الحالي: {last['Close']:.5f} | أعلى سعر اليوم: {last['High']:.5f} | أدنى سعر: {last['Low']:.5f}"
-    except Exception as e:
-        logger.warning(f"تعذر جلب بيانات السوق المباشرة: {e}")
-        return "تعذر جلب بيانات السوق الحية حالياً."
-
-def generate_chart_analysis(prompt_template, img):
+def generate_multi_chart_analysis(prompt_text, img1, img2):
     if not API_KEYS:
-        raise Exception("لم يتم العثور على مفاتيح API صالحة في متغيرات البيئة.")
+        raise Exception("لم يتم العثور على مفاتيح API صالحة.")
 
     last_error = "لم تتم المحاولة بعد."
 
     for key_idx, key in enumerate(API_KEYS):
         try:
             genai.configure(api_key=key)
-            
-            # فلترة النماذج المتاحة واستبعاد النماذج الصوتية والمستقبلية الخاصة (-tts, -embed, -realtime)
-            discovered_models = []
-            try:
-                for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods:
-                        clean_name = m.name.replace('models/', '')
-                        # استبعاد الصوت والـ Embeddings التي تسبب خطأ 429 على الحسابات المجانية
-                        if not any(bad in clean_name.lower() for bad in ['tts', 'embed', 'realtime', 'bison', 'audio']):
-                            discovered_models.append(clean_name)
-            except Exception as list_err:
-                logger.warning(f"تعذر جلب قائمة النماذج للمفتاح #{key_idx + 1}: {list_err}")
-
-            # ترتيب النماذج بدءاً من القائمة المفضلة المستقرة
-            models_to_try = []
-            for pref in PREFERRED_MODELS:
-                if pref in discovered_models:
-                    models_to_try.append(pref)
-            
-            # إضافة باقي النماذج المكتشفة التي لم تكن في القائمة المفضلة
-            for disc in discovered_models:
-                if disc not in models_to_try:
-                    models_to_try.append(disc)
-
-            # في حال عدم العثور على نماذج عبر القائمة، نستخدم القائمة الاحتياطية المباشرة
-            if not models_to_try:
-                models_to_try = PREFERRED_MODELS
-
-            live_data = fetch_live_market_data(img, key)
-            final_prompt = prompt_template.format(live_data=live_data)
-
-            for model_name in models_to_try:
+            for model_name in TARGET_MODELS:
                 try:
-                    logger.info(f"محاولة التحليل بالمفتاح #{key_idx + 1} والنموذج [{model_name}]...")
+                    logger.info(f"⚡ جاري تحليل الشارتين بالمفتاح #{key_idx + 1} والنموذج [{model_name}]...")
                     model = genai.GenerativeModel(model_name)
                     
+                    # إرسال الصورتين معاً داخل مصفوفة المدخلات
                     response = model.generate_content(
-                        [final_prompt, img], 
+                        [prompt_text, img1, img2], 
                         safety_settings=safety_settings,
                         request_options={'timeout': 25}
                     )
                     
                     if response and response.text:
-                        logger.info(f"✅ تم التحليل بنجاح عبر [{model_name}] بالمفتاح #{key_idx + 1}")
                         return response.text
                 except Exception as err:
                     err_str = str(err)
-                    logger.warning(f"فشل النموذج [{model_name}] للمفتاح #{key_idx + 1}: {err_str}")
                     last_error = err_str
-                    
-                    if "429" in err_str or "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
-                        logger.warning(f"تجاوز الحصة للنموذج [{model_name}] للمفتاح #{key_idx + 1}، تجربة النموذج التالي...")
+                    if "429" in err_str or "quota" in err_str.lower():
                         continue
         except Exception as key_err:
-            logger.warning(f"خطأ إعداد المفتاح #{key_idx + 1}: {key_err}")
             last_error = str(key_err)
 
-    raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح والنماذج. آخر خطأ: {last_error}")
+    raise Exception(f"تعذر تحليل الصورتين عبر المفاتيح. آخر خطأ: {last_error}")
 
-# === المعالجة المستقلة للصور في خيط خلفي ===
-def process_photo_async(message, lang):
+def process_photos_async(message, lang, img1, img2):
     status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
     try:
-        file_info = bot.get_file(message.photo[-1].file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        img = Image.open(BytesIO(downloaded_file))
-        
-        analysis_result = generate_chart_analysis(TEXTS[lang]['prompt'], img)
+        analysis_result = generate_multi_chart_analysis(TEXTS[lang]['prompt'], img1, img2)
         safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
         
         user = get_user(message.chat.id)
-        if not user[3]: # غير مشترك
+        if not user[3]:
             update_user(message.chat.id, 'trials', user[2] + 1)
 
     except Exception as e:
         logger.error(f"خطأ المعالجة الخلفية: {traceback.format_exc()}")
-        safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
+        safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل المزدوج.\nالسبب: `{e}`", target_lang=lang)
 
-# === المعالجات والأوامر ===
+# === الأوامر والمعالجات ===
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     get_user(message.chat.id)
@@ -392,6 +292,15 @@ def set_language(call):
         pass
     bot.send_message(call.message.chat.id, TEXTS[lang]['lang_selected'], reply_markup=get_main_keyboard(lang))
 
+@bot.message_handler(func=lambda m: m.text and ('إعادة رفع' in m.text or 'Reset' in m.text))
+def reset_chart_upload(message):
+    user_id = message.chat.id
+    if user_id in USER_CHARTS_CACHE:
+        del USER_CHARTS_CACHE[user_id]
+    user = get_user(user_id)
+    lang = user[1] if user[1] in TEXTS else 'ar'
+    bot.reply_to(message, TEXTS[lang]['reset_msg'], parse_mode='Markdown')
+
 @bot.message_handler(func=lambda m: m.text and ('حسابي' in m.text or 'Account' in m.text or m.text == '/my_account'))
 def account_info(message):
     user = get_user(message.chat.id)
@@ -407,40 +316,10 @@ def sub_info(message):
     lang = user[1] if user[1] in TEXTS else 'ar'
     bot.reply_to(message, TEXTS[lang]['sub_info'].format(user_id=message.chat.id), parse_mode='Markdown')
 
-@bot.message_handler(commands=['activate'])
-def admin_activate(message):
-    if str(message.chat.id) != str(ADMIN_ID):
-        return 
-    try:
-        parts = message.text.split()
-        if len(parts) < 3:
-            bot.reply_to(message, "❌ خطأ: استخدم الصيغة الصحيحة تماماً:\n`/activate <USER_ID> <DAYS>`", parse_mode='Markdown')
-            return
-
-        target_user_id = int(parts[1])
-        days = int(parts[2])
-        
-        tz = pytz.timezone('Asia/Riyadh')
-        start_date = datetime.datetime.now(tz)
-        end_date = start_date + datetime.timedelta(days=days)
-        
-        target_user = get_user(target_user_id)
-        target_lang = target_user[1] if target_user[1] in TEXTS else 'ar'
-        
-        update_user(target_user_id, 'is_sub', 1)
-        update_user(target_user_id, 'start_date', start_date.strftime('%Y-%m-%d'))
-        update_user(target_user_id, 'end_date', end_date.strftime('%Y-%m-%d'))
-        
-        bot.reply_to(message, f"✅ **تم التفعيل بنجاح!**\n👤 المستخدم: `{target_user_id}`\n📅 المدة: {days} يوم\n📅 الانتهاء: `{end_date.strftime('%Y-%m-%d')}`", parse_mode='Markdown')
-        
-        user_msg = TEXTS[target_lang]['activate_success_user'].format(end_date=end_date.strftime('%Y-%m-%d'))
-        bot.send_message(target_user_id, user_msg, parse_mode='Markdown')
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطأ: {e}")
-
 @bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    user = get_user(message.chat.id)
+def handle_photos(message):
+    user_id = message.chat.id
+    user = get_user(user_id)
     lang = user[1] if user[1] in TEXTS else 'ar'
     trials, is_sub, end_date_str = user[2], user[3], user[5]
     
@@ -448,7 +327,7 @@ def handle_photo(message):
         tz = pytz.timezone('Asia/Riyadh')
         try:
             if datetime.datetime.now(tz) > datetime.datetime.strptime(end_date_str, '%Y-%m-%d').replace(tzinfo=tz):
-                update_user(message.chat.id, 'is_sub', 0)
+                update_user(user_id, 'is_sub', 0)
                 is_sub = 0
         except:
             pass
@@ -457,12 +336,34 @@ def handle_photo(message):
         bot.reply_to(message, TEXTS[lang]['no_trials'], parse_mode='Markdown')
         return
 
-    threading.Thread(target=process_photo_async, args=(message, lang), daemon=True).start()
+    # تنزيل الصورة
+    file_info = bot.get_file(message.photo[-1].file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
+    img = Image.open(BytesIO(downloaded_file))
 
-# === تشغيل السيرفر والـ Webhook ===
+    # إذا لم يكن للمستخدم صورة سابقة مرفوعة
+    if user_id not in USER_CHARTS_CACHE:
+        USER_CHARTS_CACHE[user_id] = img
+        bot.reply_to(message, TEXTS[lang]['first_img_received'], parse_mode='Markdown')
+    else:
+        # الصورة الثانية وصلت -> جلب الصورة الأولى وبدء التحليل
+        img1 = USER_CHARTS_CACHE.pop(user_id)
+        img2 = img
+        executor.submit(process_photos_async, message, lang, img1, img2)
+
+# === التهيئة للـ Webhook ===
+if RENDER_URL:
+    try:
+        bot.remove_webhook()
+        time.sleep(1)
+        bot.set_webhook(url=f"{RENDER_URL.rstrip('/')}/{TELEGRAM_TOKEN}")
+        logger.info("✅ Webhook configured successfully.")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+
 @app.route('/', methods=['GET'])
 def home():
-    return "TradeGuard AI Pro Active!"
+    return "TradeGuard AI Pro Multi-Timeframe Engine Active!"
 
 @app.route('/' + TELEGRAM_TOKEN, methods=['POST'])
 def webhook():
@@ -470,16 +371,12 @@ def webhook():
         try:
             json_string = request.get_data().decode('utf-8')
             update = telebot.types.Update.de_json(json_string)
-            threading.Thread(target=bot.process_new_updates, args=([update],)).start()
+            bot.process_new_updates([update])
         except Exception as e:
             logger.error(f"Webhook Error: {e}")
         return "OK", 200
     return "Forbidden", 403
 
 if __name__ == "__main__":
-    bot.remove_webhook()
-    time.sleep(1) 
-    if RENDER_URL:
-        bot.set_webhook(url=f"{RENDER_URL.rstrip('/')}/{TELEGRAM_TOKEN}")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, threaded=True)
