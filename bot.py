@@ -255,19 +255,20 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
                 except Exception as inner_e:
                     logger.error(f"Fallback failed: {inner_e}")
 
-# === النماذج الاحتياطية الاحتياطية لسلسلة 3.x و 2.x القياسية ===
-CANDIDATE_MODELS = [
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
-    'gemini-3.5-pro',
+# === النماذج الاحتياطية المخصصة للتحليل البصري والشارتات ===
+PREFERRED_MODELS = [
     'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
     'gemini-2.0-flash'
 ]
 
 def fetch_live_market_data(img, key):
     try:
         genai.configure(api_key=key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # استخدام نموذج سريع وخفيف لاستخراج الرمز المالي
+        model = genai.GenerativeModel('gemini-1.5-flash')
         res = model.generate_content(["Extract ONLY the financial symbol (e.g. EURUSD=X, XAUUSD=X, BTC-USD). Reply ONLY symbol or UNKNOWN.", img])
         symbol = res.text.strip().upper() if res and res.text else "UNKNOWN"
         
@@ -295,21 +296,32 @@ def generate_chart_analysis(prompt_template, img):
         try:
             genai.configure(api_key=key)
             
-            # استكشاف النماذج المتاحة لمفتاح API ديناميكياً
+            # فلترة النماذج المتاحة واستبعاد النماذج الصوتية والمستقبلية الخاصة (-tts, -embed, -realtime)
             discovered_models = []
             try:
                 for m in genai.list_models():
                     if 'generateContent' in m.supported_generation_methods:
                         clean_name = m.name.replace('models/', '')
-                        discovered_models.append(clean_name)
+                        # استبعاد الصوت والـ Embeddings التي تسبب خطأ 429 على الحسابات المجانية
+                        if not any(bad in clean_name.lower() for bad in ['tts', 'embed', 'realtime', 'bison', 'audio']):
+                            discovered_models.append(clean_name)
             except Exception as list_err:
                 logger.warning(f"تعذر جلب قائمة النماذج للمفتاح #{key_idx + 1}: {list_err}")
 
-            # ترتيب النماذج المكتشفة مع النماذج الاحتياطية
-            models_to_try = [m for m in discovered_models if 'flash' in m or 'pro' in m]
-            for cand in CANDIDATE_MODELS:
-                if cand not in models_to_try:
-                    models_to_try.append(cand)
+            # ترتيب النماذج بدءاً من القائمة المفضلة المستقرة
+            models_to_try = []
+            for pref in PREFERRED_MODELS:
+                if pref in discovered_models:
+                    models_to_try.append(pref)
+            
+            # إضافة باقي النماذج المكتشفة التي لم تكن في القائمة المفضلة
+            for disc in discovered_models:
+                if disc not in models_to_try:
+                    models_to_try.append(disc)
+
+            # في حال عدم العثور على نماذج عبر القائمة، نستخدم القائمة الاحتياطية المباشرة
+            if not models_to_try:
+                models_to_try = PREFERRED_MODELS
 
             live_data = fetch_live_market_data(img, key)
             final_prompt = prompt_template.format(live_data=live_data)
@@ -334,15 +346,15 @@ def generate_chart_analysis(prompt_template, img):
                     last_error = err_str
                     
                     if "429" in err_str or "quota" in err_str.lower() or "resource_exhausted" in err_str.lower():
-                        logger.warning(f"تجاوز الحصة للمفتاح #{key_idx + 1}، الانتقال للمفتاح التالي...")
-                        break
+                        logger.warning(f"تجاوز الحصة للنموذج [{model_name}] للمفتاح #{key_idx + 1}، تجربة النموذج التالي...")
+                        continue
         except Exception as key_err:
             logger.warning(f"خطأ إعداد المفتاح #{key_idx + 1}: {key_err}")
             last_error = str(key_err)
 
     raise Exception(f"تعذر استكمال التحليل عبر كافة المفاتيح والنماذج. آخر خطأ: {last_error}")
 
-# === المعالجة المستقلة للصور في خيط خلفي لمنع التجمد ===
+# === المعالجة المستقلة للصور في خيط خلفي ===
 def process_photo_async(message, lang):
     status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
     try:
