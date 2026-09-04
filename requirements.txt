@@ -1,6 +1,6 @@
 pyTelegramBotAPI
 flask
-requests
 google-generativeai
-pillow
+Pillow
 pytz
+yfinance
