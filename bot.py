@@ -224,7 +224,12 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
             except Exception as inner_e:
                 logger.error(f"Fallback send failed: {inner_e}")
 
-TARGET_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro']
+# === حصر النماذج حصرياً على إصدارات 2.5 وما فوق وفلترة القديمة تماماً ===
+TARGET_MODELS = [
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.0-flash'
+]
 
 def generate_multi_chart_analysis(prompt_text, img1, img2):
     if not API_KEYS:
@@ -240,7 +245,6 @@ def generate_multi_chart_analysis(prompt_text, img1, img2):
                     logger.info(f"⚡ جاري تحليل الشارتين بالمفتاح #{key_idx + 1} والنموذج [{model_name}]...")
                     model = genai.GenerativeModel(model_name)
                     
-                    # إرسال الصورتين معاً داخل مصفوفة المدخلات
                     response = model.generate_content(
                         [prompt_text, img1, img2], 
                         safety_settings=safety_settings,
@@ -252,12 +256,13 @@ def generate_multi_chart_analysis(prompt_text, img1, img2):
                 except Exception as err:
                     err_str = str(err)
                     last_error = err_str
-                    if "429" in err_str or "quota" in err_str.lower():
+                    logger.warning(f"تجاوز أو خطأ للنموذج [{model_name}]: {err_str}")
+                    if "429" in err_str or "quota" in err_str.lower() or "404" in err_str:
                         continue
         except Exception as key_err:
             last_error = str(key_err)
 
-    raise Exception(f"تعذر تحليل الصورتين عبر المفاتيح. آخر خطأ: {last_error}")
+    raise Exception(f"تعذر تحليل الصورتين عبر المفاتيح والنماذج المحدثة. آخر خطأ: {last_error}")
 
 def process_photos_async(message, lang, img1, img2):
     status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
@@ -336,22 +341,18 @@ def handle_photos(message):
         bot.reply_to(message, TEXTS[lang]['no_trials'], parse_mode='Markdown')
         return
 
-    # تنزيل الصورة
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
     img = Image.open(BytesIO(downloaded_file))
 
-    # إذا لم يكن للمستخدم صورة سابقة مرفوعة
     if user_id not in USER_CHARTS_CACHE:
         USER_CHARTS_CACHE[user_id] = img
         bot.reply_to(message, TEXTS[lang]['first_img_received'], parse_mode='Markdown')
     else:
-        # الصورة الثانية وصلت -> جلب الصورة الأولى وبدء التحليل
         img1 = USER_CHARTS_CACHE.pop(user_id)
         img2 = img
         executor.submit(process_photos_async, message, lang, img1, img2)
 
-# === التهيئة للـ Webhook ===
 if RENDER_URL:
     try:
         bot.remove_webhook()
