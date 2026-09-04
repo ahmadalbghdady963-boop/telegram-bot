@@ -224,11 +224,11 @@ def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar')
             except Exception as inner_e:
                 logger.error(f"Fallback send failed: {inner_e}")
 
-# === حصر النماذج حصرياً على إصدارات 2.5 وما فوق وفلترة القديمة تماماً ===
+# === تحديث النماذج حصرياً للإصدارات الحديثة الموصى بها من واجهة برمجة التطبيقات (3.6 و 2.5 وما فوق) ===
 TARGET_MODELS = [
+    'gemini-3.6-flash',
     'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-2.0-flash'
+    'gemini-2.5-pro'
 ]
 
 def generate_multi_chart_analysis(prompt_text, img1, img2):
@@ -257,12 +257,12 @@ def generate_multi_chart_analysis(prompt_text, img1, img2):
                     err_str = str(err)
                     last_error = err_str
                     logger.warning(f"تجاوز أو خطأ للنموذج [{model_name}]: {err_str}")
-                    if "429" in err_str or "quota" in err_str.lower() or "404" in err_str:
+                    if "429" in err_str or "quota" in err_str.lower() or "404" in err_str or "not found" in err_str.lower():
                         continue
         except Exception as key_err:
             last_error = str(key_err)
 
-    raise Exception(f"تعذر تحليل الصورتين عبر المفاتيح والنماذج المحدثة. آخر خطأ: {last_error}")
+    raise Exception(f"تعذر تحليل الصورتين عبر المفاتيح والنماذج الحديثة. آخر خطأ: {last_error}")
 
 def process_photos_async(message, lang, img1, img2):
     status_msg = bot.reply_to(message, TEXTS[lang]['wait'])
