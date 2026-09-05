@@ -3,4 +3,6 @@ flask
 google-generativeai
 Pillow
 pytz
+groq
+requests
 yfinance
