@@ -6,7 +6,9 @@ import pytz
 import logging
 import traceback
 import re
+import base64
 import threading
+import requests
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask, request
@@ -15,6 +17,16 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from io import BytesIO
 from PIL import Image
 
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
+try:
+    import yfinance as yf
+except ImportError:
+    yf = None
+
 # === إعداد نظام المراقبة ===
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -22,6 +34,7 @@ logger = logging.getLogger(__name__)
 # === إعدادات النظام ===
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN') or os.environ.get('TELEGRAM_TOKEN') or os.environ.get('BOT_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 ADMIN_ID = os.environ.get('ADMIN_ID', '0')
 
@@ -30,6 +43,22 @@ if not TELEGRAM_TOKEN:
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+
+# عميل Groq يُستخدم كخط دعم احتياطي (fallback) عندما يتعذر الوصول لـ Gemini
+# (مثلاً بسبب مشاكل مصادقة من طرف جوجل مثل مفاتيح AQ. الجديدة).
+groq_client = Groq(api_key=GROQ_API_KEY) if (GROQ_API_KEY and Groq) else None
+GROQ_VISION_MODELS = [
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'meta-llama/llama-4-maverick-17b-128e-instruct',
+]
+
+# طبقة ثالثة مجانية اختيارية: OpenRouter — راوتر تلقائي يوزّع الطلبات على أكثر
+# من 18 نموذجاً مجانياً يدعم الصور، فيتجاوز عملياً سقف أي مزود واحد بمفرده.
+# للتفعيل: أنشئ حساباً مجانياً بدون بطاقة على openrouter.ai/keys وأضف القيمة
+# في متغير البيئة OPENROUTER_API_KEY على Render. إن لم تُضف القيمة، تُتخطى
+# هذه الطبقة تلقائياً دون أي خطأ.
+OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', '')
+OPENROUTER_MODEL = 'openrouter/free'
 
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -88,7 +117,9 @@ TEXTS = {
             "📊 **للحصول على أدق تحليل ممكن**، أرسل صورتين معاً في نفس الرسالة (كألبوم واحد):\n"
             "1️⃣ الصورة الأولى: شارت فريم 15 دقيقة (لتحديد الدخول بدقة)\n"
             "2️⃣ الصورة الثانية: شارت فريم 4 ساعات (لتأكيد الاتجاه العام)\n\n"
-            "يمكنك أيضاً إرسال صورة واحدة فقط، لكن الدقة تكون أعلى بكثير عند إرسال الفريمين معاً."
+            "💎 **الأهم**: أضف اسم الأداة ككتابة (Caption) على إحدى الصورتين قبل الإرسال (مثل XAUUSD أو EURUSD)، "
+            "ليجلب البوت أسعاراً حقيقية فعلية من السوق ويتحقق منها بدل تخمينها من الصورة فقط.\n\n"
+            "يمكنك أيضاً إرسال صورة واحدة فقط، لكن الدقة تكون أعلى بكثير عند إرسال الفريمين معاً مع اسم الأداة."
         ),
         'wait': '⏳ جاري فحص بنية السوق، السيولة، ومستويات العرض والطلب... برجاء الانتظار.',
         'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار، يرجى الاشتراك للحصول على وصول غير محدود.',
@@ -101,6 +132,7 @@ TEXTS = {
         'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال الآن ولغاية تاريخ: `{end_date}`.',
         'disclaimer': '\n\n⚠️ *هذا تحليل مبني على الذكاء الاصطناعي وليس توصية مالية مضمونة. لا يوجد تحليل يضمن نتيجة 100%، إدارة رأس المال مسؤوليتك دائماً.*',
         'need_two_hint': "💡 نصيحة: أرسل صورتين معاً (15 دقيقة + 4 ساعات) في نفس الرسالة للحصول على تحليل أدق وأكثر موثوقية.",
+        'symbol_tip': "💡 لرفع الدقة أكثر: أضف اسم الأداة ككتابة (Caption) على الصورة قبل الإرسال، مثل XAUUSD أو EURUSD أو BTCUSD، ليتحقق البوت من أسعار حقيقية فعلية بدل الاعتماد على قراءة الصورة فقط.",
         'system_instructions': """أنت محلل أسواق مالية وفوركس مخضرم (CMT) بخبرة مؤسسية تتجاوز 20 عاماً في Price Action وLiquidity وSupply & Demand.
 
 قواعد صارمة:
@@ -148,7 +180,9 @@ TEXTS = {
             "📊 For the most accurate analysis, send TWO images together in one message (as an album):\n"
             "1️⃣ First image: 15-minute chart (precise entry)\n"
             "2️⃣ Second image: 4-hour chart (trend confirmation)\n\n"
-            "A single image also works, but accuracy is significantly higher with both timeframes."
+            "💎 **Most important**: add the instrument name as a caption on one of the photos before sending "
+            "(e.g. XAUUSD or EURUSD), so the bot fetches real live prices to verify against, instead of guessing from the image alone.\n\n"
+            "A single image also works, but accuracy is significantly higher with both timeframes plus the symbol."
         ),
         'wait': '⏳ Scanning market structure, liquidity, and order blocks... Please wait.',
         'no_trials': '⚠️ Free trials ended (3/3). Please subscribe for unlimited analysis.',
@@ -161,6 +195,7 @@ TEXTS = {
         'activate_success_user': '🎉 **Activated!** Valid until: `{end_date}`.',
         'disclaimer': "\n\n⚠️ *AI-generated analysis, not guaranteed financial advice. No analysis guarantees 100% results — risk management is always your responsibility.*",
         'need_two_hint': "💡 Tip: send two images together (15m + 4h) in one message for higher-accuracy analysis.",
+        'symbol_tip': "💡 For higher accuracy: add the instrument name as a photo caption before sending, e.g. XAUUSD, EURUSD, or BTCUSD, so the bot can verify against real live prices instead of relying on image reading alone.",
         'system_instructions': """You are a veteran CMT-certified Forex analyst with 20+ years of institutional experience in Price Action, Liquidity, and Supply & Demand.
 
 Strict rules:
@@ -292,22 +327,173 @@ def get_available_models():
         _model_cache['ts'] = now
     return _model_cache['models']
 
-def generate_chart_analysis(parts):
+def _pil_to_data_uri(img, fmt='JPEG'):
+    buf = BytesIO()
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    img.save(buf, format=fmt, quality=90)
+    b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    return f"data:image/jpeg;base64,{b64}"
+
+def _build_openai_style_content(parts):
+    content = []
+    for p in parts:
+        if isinstance(p, Image.Image):
+            content.append({"type": "image_url", "image_url": {"url": _pil_to_data_uri(p)}})
+        else:
+            content.append({"type": "text", "text": str(p)})
+    return content
+
+def _try_gemini(parts):
+    """يحاول التحليل عبر Gemini. يرجع النص عند النجاح أو None عند الفشل."""
+    if not GEMINI_API_KEY:
+        return None, None
     models = get_available_models()
-    if not models:
-        raise Exception("لا يوجد نموذج ذكاء اصطناعي متاح حالياً.")
     last_err = None
     for model_name in models:
         try:
             model = genai.GenerativeModel(model_name)
             response = model.generate_content(parts, safety_settings=safety_settings)
             if response and response.text:
-                return response.text
+                return response.text, None
         except Exception as e:
             last_err = e
-            logger.warning(f"Model {model_name} failed: {e}")
+            logger.warning(f"Gemini model {model_name} failed: {e}")
             continue
-    raise Exception(f"تعذر تحليل الصورة، يرجى المحاولة لاحقاً. ({last_err})")
+    return None, last_err
+
+def _try_groq(parts):
+    """يحاول التحليل عبر Groq (خط احتياطي أول). يرجع النص عند النجاح أو None عند الفشل."""
+    if not groq_client:
+        return None, None
+    messages = [{"role": "user", "content": _build_openai_style_content(parts)}]
+    last_err = None
+    for model_name in GROQ_VISION_MODELS:
+        try:
+            completion = groq_client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=2500,
+            )
+            text = completion.choices[0].message.content
+            if text:
+                return text, None
+        except Exception as e:
+            last_err = e
+            logger.warning(f"Groq model {model_name} failed: {e}")
+            continue
+    return None, last_err
+
+def _try_openrouter(parts):
+    """يحاول التحليل عبر OpenRouter (خط احتياطي ثانٍ، مجاني بالكامل). يرجع النص أو None."""
+    if not OPENROUTER_API_KEY:
+        return None, None
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
+            json={
+                "model": OPENROUTER_MODEL,
+                "messages": [{"role": "user", "content": _build_openai_style_content(parts)}],
+                "temperature": 0.3,
+                "max_tokens": 2500,
+            },
+            timeout=60,
+        )
+        data = resp.json()
+        text = data.get('choices', [{}])[0].get('message', {}).get('content')
+        if text:
+            return text, None
+        return None, data.get('error', resp.text)
+    except Exception as e:
+        logger.warning(f"OpenRouter failed: {e}")
+        return None, e
+
+def generate_chart_analysis(parts):
+    if not GEMINI_API_KEY and not groq_client and not OPENROUTER_API_KEY:
+        raise Exception("لا يوجد أي مزود ذكاء اصطناعي مُهيّأ (GEMINI_API_KEY أو GROQ_API_KEY أو OPENROUTER_API_KEY).")
+
+    text, gemini_err = _try_gemini(parts)
+    if text:
+        return text
+    if gemini_err:
+        logger.warning(f"Gemini غير متاح، جاري التحويل إلى Groq. السبب: {gemini_err}")
+
+    text, groq_err = _try_groq(parts)
+    if text:
+        return text
+    if groq_err:
+        logger.warning(f"Groq غير متاح، جاري التحويل إلى OpenRouter. السبب: {groq_err}")
+
+    text, or_err = _try_openrouter(parts)
+    if text:
+        return text
+
+    raise Exception(f"تعذر تحليل الصورة عبر جميع المزودين. Gemini: {gemini_err} | Groq: {groq_err} | OpenRouter: {or_err}")
+
+# === بيانات سعرية حقيقية للتحقق من دقة القراءة البصرية ===
+# المشكلة الجذرية في "تحليل صورة شارت": النموذج البصري يُخمّن الأسعار من مواقع
+# البكسلات على الشارت، وهذا عرضة للخطأ دائماً مهما تحسّن الـ Prompt.
+# الحل: نجلب بيانات سعرية حقيقية ومؤكدة من Yahoo Finance (مجاني تماماً، بدون
+# مفتاح API وبدون حد استخدام يومي مقلق لحجم استخدام شخصي) ونمررها للنموذج
+# كأرقام موثوقة، ونجعل مهمة الصورة الاكتفاء بتأكيد الشكل والبنية والزخم.
+COMMON_TICKERS = {
+    'XAUUSD': 'XAUUSD=X', 'GOLD': 'XAUUSD=X', 'GC': 'XAUUSD=X', 'ذهب': 'XAUUSD=X',
+    'XAGUSD': 'XAGUSD=X', 'SILVER': 'XAGUSD=X', 'فضة': 'XAGUSD=X',
+    'EURUSD': 'EURUSD=X', 'GBPUSD': 'GBPUSD=X', 'USDJPY': 'USDJPY=X',
+    'AUDUSD': 'AUDUSD=X', 'USDCAD': 'USDCAD=X', 'NZDUSD': 'NZDUSD=X', 'USDCHF': 'USDCHF=X',
+    'EURJPY': 'EURJPY=X', 'GBPJPY': 'GBPJPY=X',
+    'BTCUSD': 'BTC-USD', 'BTC': 'BTC-USD', 'بيتكوين': 'BTC-USD',
+    'ETHUSD': 'ETH-USD', 'ETH': 'ETH-USD',
+    'US30': '^DJI', 'NAS100': '^NDX', 'SPX500': '^GSPC', 'GER40': '^GDAXI', 'UK100': '^FTSE',
+}
+
+def _resolve_ticker(symbol_text):
+    if not symbol_text:
+        return None
+    key = re.sub(r'[^A-Za-z0-9]', '', symbol_text).upper()
+    if key in COMMON_TICKERS:
+        return COMMON_TICKERS[key]
+    if len(key) == 6 and key.isalpha():
+        return key + '=X'
+    return None
+
+def fetch_market_snapshot(symbol_text):
+    """يجلب بيانات سعرية حقيقية (OHLC حقيقية من Yahoo Finance) لدعم دقة التحليل.
+    يرجع نص ملخص جاهز للحقن في الـ prompt، أو None إن تعذر التعرف على الرمز أو الجلب."""
+    ticker = _resolve_ticker(symbol_text)
+    if not ticker or not yf:
+        return None
+    try:
+        data = yf.download(ticker, period='5d', interval='1h', progress=False, auto_adjust=True)
+        if data is None or data.empty or len(data) < 15:
+            return None
+        highs = data['High'].squeeze()
+        lows = data['Low'].squeeze()
+        closes = data['Close'].squeeze()
+
+        last_price = float(closes.iloc[-1])
+        true_range = (highs - lows).abs()
+        atr = float(true_range.rolling(14).mean().iloc[-1])
+
+        recent = data.tail(60)
+        swing_highs = sorted(set(recent['High'].squeeze().nlargest(3).round(4).tolist()), reverse=True)
+        swing_lows = sorted(set(recent['Low'].squeeze().nsmallest(3).round(4).tolist()))
+
+        return (
+            f"[بيانات سعرية حقيقية موثقة من Yahoo Finance للرمز {ticker} - فريم ساعة]\n"
+            f"- آخر سعر إغلاق مسجل فعلياً: {last_price:.4f}\n"
+            f"- متوسط مدى التقلب الحقيقي ATR(14): {atr:.4f}\n"
+            f"- أبرز القمم السعرية الحديثة (مرشحات مقاومة حقيقية): {swing_highs}\n"
+            f"- أبرز القيعان السعرية الحديثة (مرشحات دعم حقيقي): {swing_lows}\n"
+            f"تعليمة إلزامية: اعتمد على هذه الأرقام الحقيقية كمرجع أساسي لأي سعر تذكره في "
+            f"التحليل (الدعم/المقاومة/الدخول/الوقف/الأهداف)، ولا تخترع رقماً يخالفها. "
+            f"استخدم الصورتين فقط لتأكيد شكل الشموع والبنية والزخم اللحظي، وليس لقراءة الأرقام."
+        )
+    except Exception as e:
+        logger.warning(f"Market data fetch failed for {symbol_text} ({ticker}): {e}")
+        return None
 
 # === تجميع صور الألبوم (فريمين معاً) ===
 pending_albums = {}
@@ -325,6 +511,7 @@ def process_album(media_group_id):
     status_msg_id = album['status_msg_id']
     trials = album['trials']
     is_sub = album['is_sub']
+    symbol_caption = album.get('symbol_caption')
     photos = sorted(album['photos'], key=lambda x: x[0])[:2]
 
     try:
@@ -334,13 +521,19 @@ def process_album(media_group_id):
             downloaded = bot.download_file(file_info.file_path)
             images.append(Image.open(BytesIO(downloaded)))
 
+        base_prompt = TEXTS[lang]['prompt_single'] if len(images) == 1 else TEXTS[lang]['prompt_multi']
+        snapshot = fetch_market_snapshot(symbol_caption)
+        prompt_text = base_prompt + ("\n\n" + snapshot if snapshot else "")
+
         if len(images) == 1:
-            parts = [TEXTS[lang]['prompt_single'], images[0]]
+            parts = [prompt_text, images[0]]
         else:
-            parts = [TEXTS[lang]['prompt_multi'], "Chart 1 - Lower Timeframe (Entry):", images[0], "Chart 2 - Higher Timeframe (Trend):", images[1]]
+            parts = [prompt_text, "Chart 1 - Lower Timeframe (Entry):", images[0], "Chart 2 - Higher Timeframe (Trend):", images[1]]
 
         analysis_result = generate_chart_analysis(parts)
         safe_send_long_text(chat_id, status_msg_id, analysis_result, target_lang=lang)
+        if not snapshot:
+            bot.send_message(chat_id, TEXTS[lang]['symbol_tip'])
 
         if not is_sub:
             update_user(chat_id, 'trials', trials + 1)
@@ -413,8 +606,8 @@ def admin_activate(message):
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    if not GEMINI_API_KEY:
-        bot.reply_to(message, "❌ مفتاح GEMINI_API_KEY غير مضاف في إعدادات السيرفر.")
+    if not GEMINI_API_KEY and not groq_client and not OPENROUTER_API_KEY:
+        bot.reply_to(message, "❌ لا يوجد أي مفتاح ذكاء اصطناعي مُفعّل في إعدادات السيرفر.")
         return
 
     user = get_user(message.chat.id)
@@ -448,8 +641,11 @@ def handle_photo(message):
                     'trials': trials,
                     'is_sub': is_sub,
                     'photos': [],
+                    'symbol_caption': None,
                     'timer': None,
                 }
+            if message.caption and not pending_albums[mgid]['symbol_caption']:
+                pending_albums[mgid]['symbol_caption'] = message.caption
             pending_albums[mgid]['photos'].append((message.message_id, file_id))
             if pending_albums[mgid]['timer']:
                 pending_albums[mgid]['timer'].cancel()
@@ -464,9 +660,13 @@ def handle_photo(message):
         downloaded_file = bot.download_file(file_info.file_path)
         img = Image.open(BytesIO(downloaded_file))
 
-        analysis_result = generate_chart_analysis([TEXTS[lang]['prompt_single'], img])
+        snapshot = fetch_market_snapshot(message.caption)
+        prompt_text = TEXTS[lang]['prompt_single'] + ("\n\n" + snapshot if snapshot else "")
+        analysis_result = generate_chart_analysis([prompt_text, img])
         safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
         bot.send_message(message.chat.id, TEXTS[lang]['need_two_hint'])
+        if not snapshot:
+            bot.send_message(message.chat.id, TEXTS[lang]['symbol_tip'])
 
         if not is_sub:
             update_user(message.chat.id, 'trials', trials + 1)
