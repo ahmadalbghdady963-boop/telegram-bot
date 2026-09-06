@@ -154,15 +154,14 @@ TEXTS = {
 - الدعم المحوري: (السعر بدقة)
 
 4. تقييم احتمالية الصفقة (Confluence Score):
-احسب النسبة وفق هذه المعادلة بدقة واذكر تفصيلها:
+احسب النسبة وفق هذه المعادلة بدقة، والبنود التالية **حصرية** (لا يجوز احتساب نفس الإشارة في أكثر من بند واحد):
 - نقطة أساس: 50%
-- +15% إذا كان اتجاه الفريمين متوافقاً
+- اتجاه الفريمين: **إما** +15% إذا كان الفريمان متوافقين تماماً، **أو** -20% إذا تعارضا (اختر واحداً فقط منهما، لا الاثنين معاً)
 - +15% إذا كان السعر عند منطقة سيولة/عرض/طلب قوية
-- +10% إذا وُجد كسر هيكل واضح (BOS/CHoCH) يؤكد الاتجاه
+- +10% فقط إذا وُجد كسر هيكل واضح (BOS/CHoCH) على نفس اتجاه الفريم الأكبر ويؤكده (وليس كسراً معاكساً له - الكسر المعاكس يدخل ضمن بند "التعارض" أعلاه فقط، لا يُحتسب هنا مرة أخرى)
 - +10% إذا كانت نسبة العائد للمخاطرة حتى TP1 ≥ 1:1.5
-- -20% إذا تعارضت إشارات الفريمين
 النتيجة النهائية يجب ألا تتجاوز 95% مهما كانت الظروف (لا يوجد يقين مطلق في الأسواق).
-اعرض: النسبة النهائية + جدول مختصر يوضح أي من البنود تحقق وأيها لا.
+اعرض: النسبة النهائية + جدول مختصر يوضح أي من البنود تحقق وأيها لا، مع التأكد أن مجموع البنود يطابق الحساب الحسابي فعلياً دون ازدواج.
 
 5. الخطة الاستثمارية (Trade Setup):
 - القرار: (شراء / بيع / انتظار)
@@ -217,15 +216,14 @@ Strict rules:
 - Pivot Support: (exact price)
 
 4. Trade Probability (Confluence Score):
-Compute using this exact formula and show your breakdown:
+Compute using this exact formula; the items below are **mutually exclusive** (never score the same signal under more than one item):
 - Base: 50%
-- +15% if both timeframes align in trend
+- Timeframe agreement: **either** +15% if both timeframes align in trend, **or** -20% if they conflict (pick only one, never both)
 - +15% if price is at a strong liquidity/supply/demand zone
-- +10% if a clear structure break (BOS/CHoCH) confirms direction
+- +10% only if a clear structure break (BOS/CHoCH) confirms the SAME direction as the higher timeframe (a counter-trend break falls under the "conflict" item above only, do not also count it here)
 - +10% if reward:risk to TP1 ≥ 1.5:1
-- -20% if the two timeframes conflict
 Final score must never exceed 95% under any circumstances.
-Show: final % + a short table of which criteria were met.
+Show: final % + a short table of which criteria were met, and verify the arithmetic actually matches the total with no double-counting.
 
 5. Execution & Trade Setup:
 - Decision: (Buy / Sell / Wait)
