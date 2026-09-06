@@ -48,8 +48,8 @@ if GEMINI_API_KEY:
 # (مثلاً بسبب مشاكل مصادقة من طرف جوجل مثل مفاتيح AQ. الجديدة).
 groq_client = Groq(api_key=GROQ_API_KEY) if (GROQ_API_KEY and Groq) else None
 GROQ_VISION_MODELS = [
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    'meta-llama/llama-4-maverick-17b-128e-instruct',
+    'qwen/qwen3.8-27b',
+    'qwen/qwen3.6-27b',
 ]
 
 # طبقة ثالثة مجانية اختيارية: OpenRouter — راوتر تلقائي يوزّع الطلبات على أكثر
