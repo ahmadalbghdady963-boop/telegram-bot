@@ -689,6 +689,7 @@ def process_album(media_group_id):
     except Exception as e:
         logger.error(f"Album processing error: {traceback.format_exc()}")
         safe_send_long_text(chat_id, status_msg_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
+        notify_admin_failure(chat_id, e)
 
 # === الأوامر والمعالجات ===
 
@@ -752,6 +753,52 @@ def admin_activate(message):
         bot.send_message(target_user_id, user_msg, parse_mode='Markdown')
     except Exception as e:
         bot.reply_to(message, f"❌ خطأ: استخدم الصيغة الصحيحة تماماً:\n`/activate <USER_ID> <DAYS>`\n({e})")
+
+@bot.message_handler(commands=['diag'])
+def admin_diag(message):
+    """أداة تشخيص فورية لصاحب البوت فقط: تفحص كل مزود ذكاء اصطناعي على حدة
+    باختبار حقيقي مصغّر، بدل انتظار فشل تحليل حقيقي لمستخدم لاكتشاف المشكلة
+    (تماماً كما حدث مرتين سابقاً مع تعطل Gemini وتوقف نماذج Groq)."""
+    if str(message.chat.id) != str(ADMIN_ID):
+        return
+    status_msg = bot.reply_to(message, "🔍 جاري فحص كل مزود على حدة، قد يستغرق ثوانٍ...")
+    test_img = Image.new('RGB', (20, 20), color='white')
+    test_prompt = "Reply with only the single word: OK"
+    results = []
+
+    text, err = _try_gemini([test_prompt, test_img])
+    results.append(f"• Gemini: {'✅ يعمل' if text else '❌ ' + str(err)[:200]}")
+
+    text, err = _try_groq([test_prompt, test_img])
+    if not groq_client:
+        results.append("• Groq: ⚪ لم يُفعَّل (لا يوجد GROQ_API_KEY)")
+    else:
+        results.append(f"• Groq: {'✅ يعمل' if text else '❌ ' + str(err)[:200]}")
+
+    text, err = _try_openrouter([test_prompt, test_img])
+    if not OPENROUTER_API_KEY:
+        results.append("• OpenRouter: ⚪ لم يُفعَّل (لا يوجد OPENROUTER_API_KEY)")
+    else:
+        results.append(f"• OpenRouter: {'✅ يعمل' if text else '❌ ' + str(err)[:200]}")
+
+    results.append(f"• بيانات Yahoo Finance: {'✅ متاحة' if yf else '❌ مكتبة yfinance غير مثبتة'}")
+    results.append(f"• تقويم الأخبار الاقتصادية: {'✅ مُفعَّل' if ECONOMIC_CALENDAR_API_KEY else '⚪ لم يُفعَّل (اختياري)'}")
+
+    bot.edit_message_text(
+        chat_id=message.chat.id, message_id=status_msg.message_id,
+        text="🩺 **نتيجة فحص المزودين:**\n" + "\n".join(results),
+        parse_mode='Markdown'
+    )
+
+def notify_admin_failure(user_chat_id, error):
+    """يُرسل تنبيهاً فورياً للأدمن عند فشل كل المزودين معاً لمستخدم حقيقي،
+    بدل انتظار أن يكتشف المستخدم المشكلة ويرسل لك لقطة شاشة يدوياً."""
+    if not ADMIN_ID or str(ADMIN_ID) == '0' or str(user_chat_id) == str(ADMIN_ID):
+        return
+    try:
+        bot.send_message(int(ADMIN_ID), f"🚨 فشل تحليل لمستخدم `{user_chat_id}`:\n{str(error)[:500]}\n\nجرّب `/diag` لفحص الحالة.", parse_mode='Markdown')
+    except Exception as notify_err:
+        logger.error(f"Failed to notify admin: {notify_err}")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
@@ -822,6 +869,7 @@ def handle_photo(message):
     except Exception as e:
         logger.error(f"Error: {traceback.format_exc()}")
         safe_send_long_text(message.chat.id, status_msg.message_id, f"❌ تعذر استكمال التحليل.\nالسبب: `{e}`", target_lang=lang)
+        notify_admin_failure(message.chat.id, e)
 
 # === تشغيل السيرفر والـ Webhook ===
 @app.route('/', methods=['GET'])
