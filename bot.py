@@ -161,6 +161,7 @@ TEXTS = {
 - +10% فقط إذا وُجد كسر هيكل واضح (BOS/CHoCH) على نفس اتجاه الفريم الأكبر ويؤكده (وليس كسراً معاكساً له - الكسر المعاكس يدخل ضمن بند "التعارض" أعلاه فقط، لا يُحتسب هنا مرة أخرى)
 - +10% إذا كانت نسبة العائد للمخاطرة حتى TP1 ≥ 1:1.5
 النتيجة النهائية يجب ألا تتجاوز 95% مهما كانت الظروف (لا يوجد يقين مطلق في الأسواق).
+قبل كتابة النتيجة النهائية، ابحث فعلياً عن أقوى سبب فني قد يجعل هذه الصفقة تفشل (حتى لو كانت الأغلبية تدعم الصفقة) واذكره صراحة في سطر منفصل باسم "أضعف نقطة في هذا التحليل:" — إذا لم تجد أي ضعف حقيقي بعد بحث جاد، فهذا نادر جداً ويستحق الشك بدل الثقة الكاملة.
 اعرض: النسبة النهائية + جدول مختصر يوضح أي من البنود تحقق وأيها لا، مع التأكد أن مجموع البنود يطابق الحساب الحسابي فعلياً دون ازدواج.
 
 5. الخطة الاستثمارية (Trade Setup):
@@ -168,7 +169,11 @@ TEXTS = {
 - منطقة الدخول المثالية (Entry Zone): (سعر دقيق)
 - وقف الخسارة (SL): ضعه عند أقرب نقطة إبطال فنية حقيقية (Swing point أو حافة Order Block) + هامش بسيط فقط، وليس بعيداً بشكل اعتباطي. اذكر السعر والمسافة بالنقاط عن الدخول.
 - أهداف الربح: TP1 (قريب - نسبة عائد للمخاطرة تقريبية)، TP2 (متوسط)، TP3 (بعيد عند أقرب منطقة سيولة/مقاومة كبرى)
-- إدارة المخاطر: لا تخاطر بأكثر من 1-2% من رأس المال في الصفقة الواحدة، ويفضل تصفية جزء من الصفقة عند TP1.""",
+- إدارة المخاطر: لا تخاطر بأكثر من 1-2% من رأس المال في الصفقة الواحدة، ويفضل تصفية جزء من الصفقة عند TP1.
+
+تعليمة إلزامية أخيرة: إذا كان القرار شراء أو بيع، أنهِ رسالتك بالكامل بسطر واحد فقط بهذا الشكل الحرفي بالضبط (بدون أي نص إضافي على نفس السطر، وبنفس الأرقام العشرية المستخدمة في التحليل):
+#DATA# DECISION=<BUY أو SELL> ENTRY=<رقم> SL=<رقم> TP1=<رقم> TP2=<رقم> TP3=<رقم>
+إذا كان القرار انتظار (Wait)، اكتب بدلاً منه: #DATA# NONE""",
         'prompt_single': "",  # يُبنى ديناميكياً أدناه
         'prompt_multi': "",
     },
@@ -223,6 +228,7 @@ Compute using this exact formula; the items below are **mutually exclusive** (ne
 - +10% only if a clear structure break (BOS/CHoCH) confirms the SAME direction as the higher timeframe (a counter-trend break falls under the "conflict" item above only, do not also count it here)
 - +10% if reward:risk to TP1 ≥ 1.5:1
 Final score must never exceed 95% under any circumstances.
+Before writing the final score, actively look for the strongest technical reason this trade could fail (even if the majority of signals support it) and state it explicitly on its own line labeled "Weakest point in this analysis:" — if you genuinely find no real weakness after honest effort, that is rare and warrants more skepticism, not full confidence.
 Show: final % + a short table of which criteria were met, and verify the arithmetic actually matches the total with no double-counting.
 
 5. Execution & Trade Setup:
@@ -230,7 +236,11 @@ Show: final % + a short table of which criteria were met, and verify the arithme
 - Optimal Entry Zone: (exact price)
 - Stop Loss (SL): place at the nearest real invalidation point (swing point or order block edge) + a small buffer only — never arbitrarily wide. State price and distance in pips from entry.
 - Take Profit Targets: TP1 (near, approx R:R), TP2 (mid), TP3 (far, at next major liquidity/resistance zone)
-- Risk Management: never risk more than 1-2% of capital per trade; consider partial close at TP1.""",
+- Risk Management: never risk more than 1-2% of capital per trade; consider partial close at TP1.
+
+Final mandatory instruction: if the decision is Buy or Sell, end your entire message with exactly one line in this literal format (nothing else on that line, using the same decimal precision as the rest of your analysis):
+#DATA# DECISION=<BUY or SELL> ENTRY=<number> SL=<number> TP1=<number> TP2=<number> TP3=<number>
+If the decision is Wait, write instead: #DATA# NONE""",
         'prompt_single': "",
         'prompt_multi': "",
     }
@@ -277,8 +287,73 @@ def clean_analysis_output(text, target_lang):
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
     return cleaned.strip()
 
-def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar'):
-    full_text = clean_analysis_output(full_text, target_lang) + TEXTS[target_lang]['disclaimer']
+SUMMARY_LABELS = {
+    'ar': {
+        'title': '📋 ملخص سريع للصفقة (محسوب آلياً وموثق):',
+        'decision': 'القرار', 'buy': '🟢 شراء', 'sell': '🔴 بيع',
+        'entry': '📍 الدخول', 'sl': '🛑 الوقف', 'dist': 'مسافة السعر',
+    },
+    'en': {
+        'title': '📋 Quick trade summary (auto-verified):',
+        'decision': 'Decision', 'buy': '🟢 BUY', 'sell': '🔴 SELL',
+        'entry': '📍 Entry', 'sl': '🛑 Stop Loss', 'dist': 'price distance',
+    },
+}
+
+def verify_and_append_rr(text, target_lang):
+    """يبحث عن سطر #DATA# الذي يُخرجه النموذج، يحذفه من النص الظاهر للمستخدم،
+    ثم يبني صندوق ملخص سريع (القرار + الدخول + الوقف + الأهداف الثلاثة) بأرقام
+    محسوبة رياضياً بدقة تامة في الكود بدل الاعتماد على حساب النموذج النصي لها
+    (أثبتت أمثلة حقيقية أنه عرضة لخطأ صغير متكرر) — ليسهل إيجادها دون قراءة
+    التحليل الكامل بالكامل."""
+    if not text:
+        return text
+    match = re.search(r'#DATA#\s*(.*)', text)
+    if not match:
+        return text
+    data_line = match.group(1).strip()
+    text = text[:match.start()].rstrip()
+
+    if data_line.upper().startswith('NONE'):
+        return text
+
+    nums = {k.upper(): v for k, v in re.findall(r'(ENTRY|SL|TP1|TP2|TP3)\s*=\s*([\d.]+)', data_line, flags=re.IGNORECASE)}
+    decision_match = re.search(r'DECISION\s*=\s*(BUY|SELL)', data_line, flags=re.IGNORECASE)
+    try:
+        entry = float(nums['ENTRY'])
+        sl = float(nums['SL'])
+    except (KeyError, ValueError):
+        return text
+
+    risk = abs(entry - sl)
+    if risk == 0:
+        return text
+
+    L = SUMMARY_LABELS.get(target_lang, SUMMARY_LABELS['ar'])
+    lines = [L['title']]
+    if decision_match:
+        lines.append(f"{L['decision']}: {L['buy'] if decision_match.group(1).upper() == 'BUY' else L['sell']}")
+    lines.append(f"{L['entry']}: {entry}")
+    lines.append(f"{L['sl']}: {sl} ({L['dist']}: {risk:.4f})")
+    for tp_key in ('TP1', 'TP2', 'TP3'):
+        if tp_key in nums:
+            try:
+                tp_val = float(nums[tp_key])
+                reward = abs(tp_val - entry)
+                lines.append(f"🎯 {tp_key}: {tp_val} ← 1:{reward / risk:.2f}")
+            except ValueError:
+                continue
+    if len(lines) <= 3:
+        return text
+    return "\n".join(lines) + "\n\n" + text
+
+
+def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar', prefix_note=None):
+    full_text = clean_analysis_output(full_text, target_lang)
+    full_text = verify_and_append_rr(full_text, target_lang)
+    if prefix_note:
+        full_text = prefix_note + "\n\n" + full_text
+    full_text = full_text + TEXTS[target_lang]['disclaimer']
     chunk_size = 3800
     chunks = [full_text[i:i + chunk_size] for i in range(0, len(full_text), chunk_size)]
 
@@ -493,6 +568,82 @@ def fetch_market_snapshot(symbol_text):
         logger.warning(f"Market data fetch failed for {symbol_text} ({ticker}): {e}")
         return None
 
+# === تنبيه مخاطر الأخبار الاقتصادية (طبقة اختيارية جديدة) ===
+# مهما كان التحليل الفني دقيقاً، بيانات اقتصادية عالية التأثير (فائدة، تضخم،
+# وظائف) يمكن أن تُحدث قفزة سعرية تخترق أي وقف خسارة محسوب بدقة فنية تامة.
+# هذه طبقة اختيارية بالكامل (تُفعَّل فقط عند إضافة ECONOMIC_CALENDAR_API_KEY)
+# ولا تُعطّل أي شيء إن لم تُفعَّل. المصدر: jblanked.com (خطة مجانية محدودة
+# بطلب واحد يومياً تقريباً، لذا نخزّن النتيجة يومياً بدل طلبها مع كل تحليل).
+ECONOMIC_CALENDAR_API_KEY = os.environ.get('ECONOMIC_CALENDAR_API_KEY', '')
+_econ_cache = {'events': None, 'ts': 0}
+ECON_CACHE_TTL = 20 * 3600
+
+def _get_high_impact_events_today():
+    if not ECONOMIC_CALENDAR_API_KEY:
+        return None
+    now = time.time()
+    if _econ_cache['events'] is not None and (now - _econ_cache['ts'] < ECON_CACHE_TTL):
+        return _econ_cache['events']
+    try:
+        resp = requests.get(
+            "https://www.jblanked.com/news/api/forex-factory/calendar/today/",
+            headers={"Authorization": f"Api-Key {ECONOMIC_CALENDAR_API_KEY}", "Content-Type": "application/json"},
+            params={"impact": "High"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            events = resp.json()
+            if isinstance(events, list):
+                _econ_cache['events'] = events
+                _econ_cache['ts'] = now
+                return events
+    except Exception as e:
+        logger.warning(f"Economic calendar fetch failed: {e}")
+    return _econ_cache['events']
+
+def _currencies_from_ticker(ticker):
+    if not ticker:
+        return []
+    if ticker.endswith('=X') and len(ticker) == 8:
+        base = ticker[:6]
+        return [base[:3], base[3:]]
+    if ticker in ('XAUUSD=X', 'XAGUSD=X', 'BTC-USD', 'ETH-USD', '^DJI', '^NDX', '^GSPC'):
+        return ['USD']
+    if ticker == '^GDAXI':
+        return ['EUR']
+    if ticker == '^FTSE':
+        return ['GBP']
+    return []
+
+def check_news_risk(symbol_text, lang):
+    """يتحقق من وجود بيانات اقتصادية عالية التأثير اليوم لعملات الأداة المطلوبة.
+    يرجع نص تنبيه أو None (بصمت) إن لم يوجد مفتاح، أو لم يتعرف على الرمز، أو لا يوجد خطر."""
+    ticker = _resolve_ticker(symbol_text)
+    currencies = _currencies_from_ticker(ticker)
+    if not currencies:
+        return None
+    events = _get_high_impact_events_today()
+    if not events:
+        return None
+    try:
+        matches = [e for e in events if e.get('Currency') in currencies and str(e.get('Impact', '')).lower() == 'high']
+    except Exception:
+        return None
+    if not matches:
+        return None
+
+    if lang == 'ar':
+        lines = ["⚠️ **تنبيه: بيانات اقتصادية عالية التأثير اليوم**"]
+        for e in matches[:3]:
+            lines.append(f"- {e.get('Currency')}: {e.get('Name')} ({e.get('Date')})")
+        lines.append("قد تُحدث هذه البيانات تقلبات حادة تخترق أي وقف خسارة فني مهما كان محسوباً بدقة — تحقق من توقيتها الفعلي بنفسك قبل الدخول، أو انتظر بعد صدورها.")
+    else:
+        lines = ["⚠️ **Alert: high-impact economic data today**"]
+        for e in matches[:3]:
+            lines.append(f"- {e.get('Currency')}: {e.get('Name')} ({e.get('Date')})")
+        lines.append("This data can cause sharp moves that blow through any technically-sound stop-loss — verify the exact release time yourself before entering, or wait until after it's released.")
+    return "\n".join(lines)
+
 # === تجميع صور الألبوم (فريمين معاً) ===
 pending_albums = {}
 albums_lock = threading.Lock()
@@ -529,7 +680,7 @@ def process_album(media_group_id):
             parts = [prompt_text, "Chart 1 - Lower Timeframe (Entry):", images[0], "Chart 2 - Higher Timeframe (Trend):", images[1]]
 
         analysis_result = generate_chart_analysis(parts)
-        safe_send_long_text(chat_id, status_msg_id, analysis_result, target_lang=lang)
+        safe_send_long_text(chat_id, status_msg_id, analysis_result, target_lang=lang, prefix_note=check_news_risk(symbol_caption, lang))
         if not snapshot:
             bot.send_message(chat_id, TEXTS[lang]['symbol_tip'])
 
@@ -661,7 +812,7 @@ def handle_photo(message):
         snapshot = fetch_market_snapshot(message.caption)
         prompt_text = TEXTS[lang]['prompt_single'] + ("\n\n" + snapshot if snapshot else "")
         analysis_result = generate_chart_analysis([prompt_text, img])
-        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang)
+        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang, prefix_note=check_news_risk(message.caption, lang))
         bot.send_message(message.chat.id, TEXTS[lang]['need_two_hint'])
         if not snapshot:
             bot.send_message(message.chat.id, TEXTS[lang]['symbol_tip'])
