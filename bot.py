@@ -169,6 +169,7 @@ TEXTS = {
 5. الخطة الاستثمارية (Trade Setup):
 - القرار: (شراء / بيع / انتظار)
 - منطقة الدخول المثالية (Entry Zone): (سعر دقيق)
+- نوع الأمر: قارن سعر الدخول المثالي بالسعر الحالي الفعلي صراحة، ثم حدد: **"أمر فوري (Market)"** فقط إذا كان السعر الحالي عند منطقة الدخول بالفعل مع تأكيد واضح الآن، أو **"أمر معلق (Buy Limit / Sell Limit / Buy Stop / Sell Stop)"** إذا كانت منطقة الدخول المثالية تبعد عن السعر الحالي — في هذه الحالة انتظر وصول السعر إليها بدل ملاحقته، واذكر نوع الأمر المعلق الصحيح تحديداً (Limit إذا كان الدخول عند ارتداد من منطقة أبعد وأسوأ سعرياً من السعر الحالي، Stop إذا كان الدخول يتطلب تأكيد اختراق فوق/تحت السعر الحالي).
 - وقف الخسارة (SL): ضعه عند أقرب نقطة إبطال فنية حقيقية (Swing point أو حافة Order Block) + هامش بسيط فقط، وليس بعيداً بشكل اعتباطي. اذكر السعر والمسافة بالنقاط عن الدخول.
 - أهداف الربح: TP1 (قريب - نسبة عائد للمخاطرة تقريبية)، TP2 (متوسط)، TP3 (بعيد عند أقرب منطقة سيولة/مقاومة كبرى)
 - إدارة المخاطر: لا تخاطر بأكثر من 1-2% من رأس المال في الصفقة الواحدة، ويفضل تصفية جزء من الصفقة عند TP1.
@@ -216,6 +217,27 @@ def clean_analysis_output(text, target_lang):
     cleaned = text
     for p in patterns:
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+
+    # حماية إضافية: بعض النماذج الأصغر (مثل Qwen عبر Groq) قد تكرر سطراً طويلاً
+    # مباشرة بعد نفسه أحياناً (لوحظ فعلياً في الإنتاج) — نحذف أي تكرار متتالٍ فوري.
+    paragraphs = re.split(r'\n\s*\n', cleaned)
+    deduped_paragraphs = []
+    for para in paragraphs:
+        p_stripped = para.strip()
+        if deduped_paragraphs and p_stripped and len(p_stripped) > 15 and p_stripped == deduped_paragraphs[-1].strip():
+            continue
+        deduped_paragraphs.append(para)
+    cleaned = '\n\n'.join(deduped_paragraphs)
+
+    lines = cleaned.split('\n')
+    deduped = []
+    for line in lines:
+        stripped = line.strip()
+        if deduped and stripped and len(stripped) > 5 and stripped == deduped[-1].strip():
+            continue
+        deduped.append(line)
+    cleaned = '\n'.join(deduped)
+
     return cleaned.strip()
 
 SUMMARY_LABELS = {
