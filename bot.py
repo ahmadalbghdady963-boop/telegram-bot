@@ -10,7 +10,7 @@ import base64
 import threading
 import requests
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask, request
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
@@ -111,9 +111,9 @@ def update_user(user_id, field, value):
 # === نصوص وقوالب اللغات ===
 TEXTS = {
     'ar': {
-        'welcome': "مرحباً بك في TradeGuard AI 📈\nمستشارك الذكي لتحليل الأسواق المالية والفوركس.\n\nالرجاء اختيار لغتك / Choose your language:",
         'lang_selected': (
-            "تم اختيار اللغة العربية بنجاح ✅\n\n"
+            "مرحباً بك في TradeGuard AI 📈\n"
+            "مستشارك الذكي لتحليل الأسواق المالية والفوركس.\n\n"
             "📊 **للحصول على أدق تحليل ممكن**، أرسل صورتين معاً في نفس الرسالة (كألبوم واحد):\n"
             "1️⃣ الصورة الأولى: شارت فريم 15 دقيقة (لتحديد الدخول بدقة)\n"
             "2️⃣ الصورة الثانية: شارت فريم 4 ساعات (لتأكيد الاتجاه العام)\n\n"
@@ -124,7 +124,7 @@ TEXTS = {
         'wait': '⏳ جاري فحص بنية السوق، السيولة، ومستويات العرض والطلب... برجاء الانتظار.',
         'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار، يرجى الاشتراك للحصول على وصول غير محدود.',
         'account': '👤 **معلومات حسابك**\n\n🆔 الـ ID الخاص بك: `{user_id}`\n📊 المحاولات المستخدمة: {trials}/3\n💎 حالة الاشتراك: {sub_status}',
-        'sub_info': '💎 **باقات الاشتراك في TradeGuard AI Pro**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n🔹 **اشتراك شهري (30 يوم):** 50 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد التحويل، أرسل صورة الإشعار والـ ID الخاص بك (`{user_id}`) للتفعيل الفوري:\n@TradeGuard_Admin',
+        'sub_info': '💎 **الاشتراك في TradeGuard AI Pro**\n\n🔹 **اشتراك 10 أيام:** 20 دولار (USDT)\n\n📥 **عنوان محفظة الدفع (USDT - TON Network):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 بعد التحويل، أرسل صورة الإشعار والـ ID الخاص بك (`{user_id}`) للتفعيل الفوري:\n@TradeGuard_Admin',
         'active': 'فعال ✅ (ينتهي في: {end})',
         'inactive': 'غير فعال ❌',
         'btn_acc': '👤 حسابي',
@@ -134,6 +134,8 @@ TEXTS = {
         'need_two_hint': "💡 نصيحة: أرسل صورتين معاً (15 دقيقة + 4 ساعات) في نفس الرسالة للحصول على تحليل أدق وأكثر موثوقية.",
         'symbol_tip': "💡 لرفع الدقة أكثر: أضف اسم الأداة ككتابة (Caption) على الصورة قبل الإرسال، مثل XAUUSD أو EURUSD أو BTCUSD، ليتحقق البوت من أسعار حقيقية فعلية بدل الاعتماد على قراءة الصورة فقط.",
         'system_instructions': """أنت محلل أسواق مالية وفوركس مخضرم (CMT) بخبرة مؤسسية تتجاوز 20 عاماً في Price Action وLiquidity وSupply & Demand.
+
+التزم بالإيجاز الشديد في كل نقطة (جملة إلى جملتين كحد أقصى لكل بند فرعي، بدون حشو أو تكرار) مع الحفاظ الكامل على القالب والبنود الخمسة أدناه دون حذف أي منها — هذا يضمن وصول التحليل كاملاً دون انقطاع بسبب طول الرد.
 
 قواعد صارمة:
 1. الصور المرفقة قد تكون لقطات شاشة كاملة من منصات تداول حقيقية (مثل MetaTrader 4/5، TradingView، تطبيقات وسطاء) وتحتوي عناصر واجهة إضافية حول الشارت نفسه (أسعار Buy/Sell، حجم اللوت، أزرار، خلفيات، علامات مائية) — هذا لا يعني أنها ليست شارتاً مالياً؛ ابحث عن الشموع اليابانية ومحور الأسعار داخل الصورة بعناية حتى لو كانت محاطة بعناصر واجهة أخرى. **ارفض فقط** إذا كانت الصورة بلا أي شك لا علاقة لها إطلاقاً بأي شارت مالي (مثل صورة شخصية، ميم، أو نص عشوائي) — في هذه الحالة فقط اكتب حرفياً: "⚠️ عذراً، هذه الصورة لا تطابق رسماً بيانياً لشموع يابانية أو سوق مالي."
@@ -176,84 +178,13 @@ TEXTS = {
 إذا كان القرار انتظار (Wait)، اكتب بدلاً منه: #DATA# NONE""",
         'prompt_single': "",  # يُبنى ديناميكياً أدناه
         'prompt_multi': "",
-    },
-    'en': {
-        'welcome': "Welcome to TradeGuard AI 📈\nYour AI advisor for Forex and Financial Markets.\n\nChoose your language / اختر لغتك:",
-        'lang_selected': (
-            "English selected ✅\n\n"
-            "📊 For the most accurate analysis, send TWO images together in one message (as an album):\n"
-            "1️⃣ First image: 15-minute chart (precise entry)\n"
-            "2️⃣ Second image: 4-hour chart (trend confirmation)\n\n"
-            "💎 **Most important**: add the instrument name as a caption on one of the photos before sending "
-            "(e.g. XAUUSD or EURUSD), so the bot fetches real live prices to verify against, instead of guessing from the image alone.\n\n"
-            "A single image also works, but accuracy is significantly higher with both timeframes plus the symbol."
-        ),
-        'wait': '⏳ Scanning market structure, liquidity, and order blocks... Please wait.',
-        'no_trials': '⚠️ Free trials ended (3/3). Please subscribe for unlimited analysis.',
-        'account': '👤 **Your Account**\n\n🆔 User ID: `{user_id}`\n📊 Trials Used: {trials}/3\n💎 Subscription: {sub_status}',
-        'sub_info': '💎 **TradeGuard AI Pro Plans**\n\n🔹 **10 Days:** $20 (USDT)\n🔹 **Monthly:** $50 (USDT)\n\n📥 **Wallet (USDT - TON):**\n`UQClWC3pSNcpxdYrRstljCDLKYcTY760blJnIElyieAFSdQK`\n\n📞 Send receipt & ID (`{user_id}`) to activate:\n@TradeGuard_Admin',
-        'active': 'Active ✅ (Expires: {end})',
-        'inactive': 'Inactive ❌',
-        'btn_acc': '👤 My Account',
-        'btn_sub': '💎 Subscription',
-        'activate_success_user': '🎉 **Activated!** Valid until: `{end_date}`.',
-        'disclaimer': "\n\n⚠️ *AI-generated analysis, not guaranteed financial advice. No analysis guarantees 100% results — risk management is always your responsibility.*",
-        'need_two_hint': "💡 Tip: send two images together (15m + 4h) in one message for higher-accuracy analysis.",
-        'symbol_tip': "💡 For higher accuracy: add the instrument name as a photo caption before sending, e.g. XAUUSD, EURUSD, or BTCUSD, so the bot can verify against real live prices instead of relying on image reading alone.",
-        'system_instructions': """You are a veteran CMT-certified Forex analyst with 20+ years of institutional experience in Price Action, Liquidity, and Supply & Demand.
-
-Strict rules:
-1. Images may be full screenshots from real trading platforms (MetaTrader 4/5, TradingView, broker apps) and can include extra UI elements around the chart itself (Buy/Sell price boxes, lot size, buttons, backgrounds, watermarks) — this does NOT mean it isn't a financial chart; look carefully for candlesticks and a price axis within the image even if surrounded by other UI. **Only reject** if the image is unmistakably and entirely unrelated to any financial chart (e.g. a selfie, a meme, random unrelated text) — only in that case reply ONLY: "⚠️ Sorry, this image is not a candlestick chart or financial market graph."
-2. Base everything strictly on visible candles/prices in the images. No invented numbers.
-3. NEVER claim 100% success probability - that is unrealistic for any financial market.
-4. Output in English only, no preamble, using this exact template:
-
-1. Market Structure & Dominant Trend:
-- (4H trend: bullish/bearish/consolidation + structural reason)
-- (Does the 15m frame align or conflict with the higher timeframe?)
-
-2. Liquidity & Supply/Demand Zones:
-- Key Supply Zone: (exact price + technical reason)
-- Key Demand Zone: (exact price + technical reason)
-
-3. Core Support & Resistance:
-- Pivot Resistance: (exact price)
-- Pivot Support: (exact price)
-
-4. Trade Probability (Confluence Score):
-Compute using this exact formula; the items below are **mutually exclusive** (never score the same signal under more than one item):
-- Base: 50%
-- Timeframe agreement: **either** +15% if both timeframes align in trend, **or** -20% if they conflict (pick only one, never both)
-- +15% if price is at a strong liquidity/supply/demand zone
-- +10% only if a clear structure break (BOS/CHoCH) confirms the SAME direction as the higher timeframe (a counter-trend break falls under the "conflict" item above only, do not also count it here)
-- +10% if reward:risk to TP1 ≥ 1.5:1
-Final score must never exceed 95% under any circumstances.
-Before writing the final score, actively look for the strongest technical reason this trade could fail (even if the majority of signals support it) and state it explicitly on its own line labeled "Weakest point in this analysis:" — if you genuinely find no real weakness after honest effort, that is rare and warrants more skepticism, not full confidence.
-Show: final % + a short table of which criteria were met, and verify the arithmetic actually matches the total with no double-counting.
-
-5. Execution & Trade Setup:
-- Decision: (Buy / Sell / Wait)
-- Optimal Entry Zone: (exact price)
-- Stop Loss (SL): place at the nearest real invalidation point (swing point or order block edge) + a small buffer only — never arbitrarily wide. State price and distance in pips from entry.
-- Take Profit Targets: TP1 (near, approx R:R), TP2 (mid), TP3 (far, at next major liquidity/resistance zone)
-- Risk Management: never risk more than 1-2% of capital per trade; consider partial close at TP1.
-
-Final mandatory instruction: if the decision is Buy or Sell, end your entire message with exactly one line in this literal format (nothing else on that line, using the same decimal precision as the rest of your analysis):
-#DATA# DECISION=<BUY or SELL> ENTRY=<number> SL=<number> TP1=<number> TP2=<number> TP3=<number>
-If the decision is Wait, write instead: #DATA# NONE""",
-        'prompt_single': "",
-        'prompt_multi': "",
     }
 }
 
 for _lang in TEXTS:
     _base = TEXTS[_lang]['system_instructions']
-    if _lang == 'ar':
-        TEXTS[_lang]['prompt_single'] = _base + "\n\nملاحظة: تم إرسال صورة واحدة فقط (بدون فريم مقارن)، اعتمد عليها حصراً وأشر في نهاية التحليل أن دقة الإشارة ستكون أعلى لو تم إرفاق فريم 4 ساعات."
-        TEXTS[_lang]['prompt_multi'] = _base + "\n\nتم إرفاق صورتين: الأولى فريم 15 دقيقة (لحظة الدخول)، الثانية فريم 4 ساعات (السياق العام). حلل التوافق بينهما بدقة قبل إعطاء القرار النهائي."
-    else:
-        TEXTS[_lang]['prompt_single'] = _base + "\n\nNote: only one image was sent (no comparison timeframe). Use it exclusively and mention at the end that accuracy improves if a 4H chart is also attached."
-        TEXTS[_lang]['prompt_multi'] = _base + "\n\nTwo images attached: first = 15m (entry), second = 4H (context). Carefully analyze their alignment before the final decision."
+    TEXTS[_lang]['prompt_single'] = _base + "\n\nملاحظة: تم إرسال صورة واحدة فقط (بدون فريم مقارن)، اعتمد عليها حصراً وأشر في نهاية التحليل أن دقة الإشارة ستكون أعلى لو تم إرفاق فريم 4 ساعات."
+    TEXTS[_lang]['prompt_multi'] = _base + "\n\nتم إرفاق صورتين: الأولى فريم 15 دقيقة (لحظة الدخول)، الثانية فريم 4 ساعات (السياق العام). حلل التوافق بينهما بدقة قبل إعطاء القرار النهائي."
 
 def get_main_keyboard(lang):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -292,11 +223,6 @@ SUMMARY_LABELS = {
         'title': '📋 ملخص سريع للصفقة (محسوب آلياً وموثق):',
         'decision': 'القرار', 'buy': '🟢 شراء', 'sell': '🔴 بيع',
         'entry': '📍 الدخول', 'sl': '🛑 الوقف', 'dist': 'مسافة السعر',
-    },
-    'en': {
-        'title': '📋 Quick trade summary (auto-verified):',
-        'decision': 'Decision', 'buy': '🟢 BUY', 'sell': '🔴 SELL',
-        'entry': '📍 Entry', 'sl': '🛑 Stop Loss', 'dist': 'price distance',
     },
 }
 
@@ -447,7 +373,7 @@ def _try_groq(parts):
                 model=model_name,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=2500,
+                max_tokens=900,
             )
             text = completion.choices[0].message.content
             if text:
@@ -696,20 +622,7 @@ def process_album(media_group_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     get_user(message.chat.id)
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar"),
-               InlineKeyboardButton("🇬🇧 English", callback_data="lang_en"))
-    bot.reply_to(message, TEXTS['ar']['welcome'], reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('lang_'))
-def set_language(call):
-    lang = call.data.split('_')[1]
-    update_user(call.message.chat.id, 'lang', lang)
-    try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception:
-        pass
-    bot.send_message(call.message.chat.id, TEXTS[lang]['lang_selected'], reply_markup=get_main_keyboard(lang), parse_mode='Markdown')
+    bot.reply_to(message, TEXTS['ar']['lang_selected'], reply_markup=get_main_keyboard('ar'), parse_mode='Markdown')
 
 @bot.message_handler(func=lambda m: m.text and ('حسابي' in m.text or 'Account' in m.text or m.text == '/my_account'))
 def account_info(message):
