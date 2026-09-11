@@ -114,12 +114,13 @@ TEXTS = {
         'lang_selected': (
             "مرحباً بك في TradeGuard AI 📈\n"
             "مستشارك الذكي لتحليل الأسواق المالية والفوركس.\n\n"
-            "📊 **للحصول على أدق تحليل ممكن**، أرسل صورتين معاً في نفس الرسالة (كألبوم واحد):\n"
+            "📊 **للحصول على أدق تحليل ممكن**، أرسل الصور معاً في نفس الرسالة (كألبوم واحد)، **بهذا الترتيب تحديداً**:\n"
             "1️⃣ الصورة الأولى: شارت فريم 15 دقيقة (لتحديد الدخول بدقة)\n"
-            "2️⃣ الصورة الثانية: شارت فريم 4 ساعات (لتأكيد الاتجاه العام)\n\n"
-            "💎 **الأهم**: أضف اسم الأداة ككتابة (Caption) على إحدى الصورتين قبل الإرسال (مثل XAUUSD أو EURUSD)، "
+            "2️⃣ الصورة الثانية: شارت فريم 4 ساعات (المنطقة والسياق)\n"
+            "3️⃣ (اختياري) الصورة الثالثة: شارت الفريم اليومي D1 (لتأكيد الاتجاه العام الأكبر وتجنب الدخول عكسه)\n\n"
+            "💎 **الأهم**: أضف اسم الأداة ككتابة (Caption) على إحدى الصور قبل الإرسال (مثل XAUUSD أو EURUSD)، "
             "ليجلب البوت أسعاراً حقيقية فعلية من السوق ويتحقق منها بدل تخمينها من الصورة فقط.\n\n"
-            "يمكنك أيضاً إرسال صورة واحدة فقط، لكن الدقة تكون أعلى بكثير عند إرسال الفريمين معاً مع اسم الأداة."
+            "يمكنك أيضاً إرسال صورة واحدة فقط، لكن الدقة تزداد مع كل فريم إضافي تُرفقه بنفس الترتيب أعلاه."
         ),
         'wait': '⏳ جاري فحص بنية السوق، السيولة، ومستويات العرض والطلب... برجاء الانتظار.',
         'no_trials': '⚠️ عذراً، لقد استنفدت محاولاتك المجانية (3/3).\n\nللاستمرار، يرجى الاشتراك للحصول على وصول غير محدود.',
@@ -131,7 +132,7 @@ TEXTS = {
         'btn_sub': '💎 الاشتراك',
         'activate_success_user': '🎉 **تم تفعيل اشتراكك بنجاح!**\n\nاشتراكك فعال الآن ولغاية تاريخ: `{end_date}`.',
         'disclaimer': '\n\n⚠️ *هذا تحليل مبني على الذكاء الاصطناعي وليس توصية مالية مضمونة. لا يوجد تحليل يضمن نتيجة 100%، إدارة رأس المال مسؤوليتك دائماً.*',
-        'need_two_hint': "💡 نصيحة: أرسل صورتين معاً (15 دقيقة + 4 ساعات) في نفس الرسالة للحصول على تحليل أدق وأكثر موثوقية.",
+        'need_two_hint': "💡 نصيحة: أرسل صورتين أو ثلاثاً معاً بالترتيب (15 دقيقة ثم 4 ساعات ثم يومي اختياري) في نفس الرسالة للحصول على تحليل أدق وأكثر موثوقية.",
         'symbol_tip': "💡 لرفع الدقة أكثر: أضف اسم الأداة ككتابة (Caption) على الصورة قبل الإرسال، مثل XAUUSD أو EURUSD أو BTCUSD، ليتحقق البوت من أسعار حقيقية فعلية بدل الاعتماد على قراءة الصورة فقط.",
         'system_instructions': """أنت محلل أسواق مالية وفوركس مخضرم (CMT) بخبرة مؤسسية تتجاوز 20 عاماً في Price Action وLiquidity وSupply & Demand.
 
@@ -187,6 +188,12 @@ for _lang in TEXTS:
     _base = TEXTS[_lang]['system_instructions']
     TEXTS[_lang]['prompt_single'] = _base + "\n\nملاحظة: تم إرسال صورة واحدة فقط (بدون فريم مقارن)، اعتمد عليها حصراً وأشر في نهاية التحليل أن دقة الإشارة ستكون أعلى لو تم إرفاق فريم 4 ساعات."
     TEXTS[_lang]['prompt_multi'] = _base + "\n\nتم إرفاق صورتين: الأولى فريم 15 دقيقة (لحظة الدخول)، الثانية فريم 4 ساعات (السياق العام). حلل التوافق بينهما بدقة قبل إعطاء القرار النهائي."
+    TEXTS[_lang]['prompt_triple'] = _base + (
+        "\n\nتم إرفاق ثلاث صور: الأولى فريم 15 دقيقة (لحظة الدخول)، الثانية فريم 4 ساعات (المنطقة والسياق المتوسط)، "
+        "الثالثة فريم يومي D1 (الاتجاه العام الأكبر). اعتبر الفريم اليومي المرجع الأعلى أولوية بين الثلاثة: "
+        "إذا كان الاتجاه اليومي يعارض بوضوح اتجاه فريم 4 الساعات، اذكر هذا التعارض صراحة ضمن \"أضعف نقطة في هذا التحليل\" "
+        "وطبّق عليه نفس تعليمة الحذر الإلزامية (انتظار أو أمر معلق بعد تأكيد إضافي)، حتى لو بدت إشارة فريم 4 الساعات وحدها ممتازة."
+    )
 
 def get_main_keyboard(lang):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -622,7 +629,7 @@ def process_album(media_group_id):
     trials = album['trials']
     is_sub = album['is_sub']
     symbol_caption = album.get('symbol_caption')
-    photos = sorted(album['photos'], key=lambda x: x[0])[:2]
+    photos = sorted(album['photos'], key=lambda x: x[0])[:3]
 
     try:
         images = []
@@ -631,14 +638,24 @@ def process_album(media_group_id):
             downloaded = bot.download_file(file_info.file_path)
             images.append(Image.open(BytesIO(downloaded)))
 
-        base_prompt = TEXTS[lang]['prompt_single'] if len(images) == 1 else TEXTS[lang]['prompt_multi']
+        if len(images) == 1:
+            base_prompt = TEXTS[lang]['prompt_single']
+        elif len(images) == 2:
+            base_prompt = TEXTS[lang]['prompt_multi']
+        else:
+            base_prompt = TEXTS[lang]['prompt_triple']
         snapshot = fetch_market_snapshot(symbol_caption)
         prompt_text = base_prompt + ("\n\n" + snapshot if snapshot else "")
 
         if len(images) == 1:
             parts = [prompt_text, images[0]]
-        else:
+        elif len(images) == 2:
             parts = [prompt_text, "Chart 1 - Lower Timeframe (Entry):", images[0], "Chart 2 - Higher Timeframe (Trend):", images[1]]
+        else:
+            parts = [prompt_text,
+                     "Chart 1 - Lower Timeframe (Entry, e.g. 15m):", images[0],
+                     "Chart 2 - Mid Timeframe (Zones/Context, e.g. 4H):", images[1],
+                     "Chart 3 - Daily Timeframe (Dominant Trend Filter):", images[2]]
 
         analysis_result = generate_chart_analysis(parts)
         safe_send_long_text(chat_id, status_msg_id, analysis_result, target_lang=lang, prefix_note=check_news_risk(symbol_caption, lang))
