@@ -316,9 +316,12 @@ def verify_and_append_rr(text, target_lang):
     return "\n".join(lines) + "\n\n" + text
 
 
-def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar', prefix_note=None):
+def safe_send_long_text(chat_id, status_message_id, full_text, target_lang='ar', prefix_note=None, resolved_symbol=None):
     full_text = clean_analysis_output(full_text, target_lang)
     full_text = verify_and_append_rr(full_text, target_lang)
+    if resolved_symbol:
+        tag = f"🏷️ الأداة المتعرف عليها: {resolved_symbol}" if target_lang == 'ar' else f"🏷️ Recognized instrument: {resolved_symbol}"
+        full_text = tag + "\n\n" + full_text
     if prefix_note:
         full_text = prefix_note + "\n\n" + full_text
     full_text = full_text + TEXTS[target_lang]['disclaimer']
@@ -658,7 +661,7 @@ def process_album(media_group_id):
                      "Chart 3 - Daily Timeframe (Dominant Trend Filter):", images[2]]
 
         analysis_result = generate_chart_analysis(parts)
-        safe_send_long_text(chat_id, status_msg_id, analysis_result, target_lang=lang, prefix_note=check_news_risk(symbol_caption, lang))
+        safe_send_long_text(chat_id, status_msg_id, analysis_result, target_lang=lang, prefix_note=check_news_risk(symbol_caption, lang), resolved_symbol=_resolve_ticker(symbol_caption))
         if not snapshot:
             bot.send_message(chat_id, TEXTS[lang]['symbol_tip'])
 
@@ -824,7 +827,7 @@ def handle_photo(message):
         snapshot = fetch_market_snapshot(message.caption)
         prompt_text = TEXTS[lang]['prompt_single'] + ("\n\n" + snapshot if snapshot else "")
         analysis_result = generate_chart_analysis([prompt_text, img])
-        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang, prefix_note=check_news_risk(message.caption, lang))
+        safe_send_long_text(message.chat.id, status_msg.message_id, analysis_result, target_lang=lang, prefix_note=check_news_risk(message.caption, lang), resolved_symbol=_resolve_ticker(message.caption))
         bot.send_message(message.chat.id, TEXTS[lang]['need_two_hint'])
         if not snapshot:
             bot.send_message(message.chat.id, TEXTS[lang]['symbol_tip'])
