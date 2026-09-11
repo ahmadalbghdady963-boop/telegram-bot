@@ -371,11 +371,14 @@ def get_available_models():
         _model_cache['ts'] = now
     return _model_cache['models']
 
-def _pil_to_data_uri(img, fmt='JPEG'):
-    buf = BytesIO()
+def _pil_to_data_uri(img, fmt='JPEG', max_dim=1280):
     if img.mode != 'RGB':
         img = img.convert('RGB')
-    img.save(buf, format=fmt, quality=90)
+    if max(img.size) > max_dim:
+        ratio = max_dim / max(img.size)
+        img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
+    buf = BytesIO()
+    img.save(buf, format=fmt, quality=85)
     b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     return f"data:image/jpeg;base64,{b64}"
 
